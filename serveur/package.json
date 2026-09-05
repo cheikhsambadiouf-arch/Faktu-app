@@ -1,0 +1,13 @@
+{
+  "name": "faktu-server",
+  "version": "0.1.0",
+  "description": "Backend FAKTU — auth, entreprise, clients, produits, livreurs, factures, ventes, liens publics client",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "license": "UNLICENSED"
+}
