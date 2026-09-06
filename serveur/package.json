@@ -6,8 +6,8 @@
   "scripts": {
     "start": "node index.js"
   },
-  "engines": {
-    "node": ">=22.5.0"
+  "dependencies": {
+    "better-sqlite3": "^11.3.0"
   },
   "license": "UNLICENSED"
 }
