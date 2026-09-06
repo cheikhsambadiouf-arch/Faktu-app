@@ -1,13 +1,16 @@
 // db.js — Connexion et schéma SQLite pour FAKTU
-// Utilise le module natif node:sqlite (Node 22.5+, encore expérimental).
-// Si votre hébergeur utilise un Node plus ancien, remplacez par le paquet
-// npm "better-sqlite3" (API quasi identique, voir README.md).
+// Utilise "better-sqlite3" (API synchrone, quasi identique à node:sqlite)
+// plutôt que le module natif node:sqlite : ce dernier est encore
+// expérimental et exige Node 22.5+, une version que plusieurs hébergeurs
+// gratuits (Render, Railway) n'ont pas réussi à garantir de façon fiable
+// malgré les réglages de version — better-sqlite3 fonctionne sur des
+// versions de Node bien plus larges et évite ce problème à la racine.
 
-const { DatabaseSync } = require('node:sqlite');
+const Database = require('better-sqlite3');
 const path = require('path');
 
 const DB_PATH = process.env.DB_PATH || path.join(__dirname, 'faktu.db');
-const db = new DatabaseSync(DB_PATH);
+const db = new Database(DB_PATH);
 
 db.exec(`PRAGMA foreign_keys = ON;`);
 
