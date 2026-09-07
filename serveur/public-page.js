@@ -164,10 +164,10 @@ async function payWithPaydunya(){
   try{
     const res = await fetch(\`\${API}/api/public/orders/\${TOKEN}/paydunya-checkout\`, {method:'POST'});
     const data = await res.json();
-    if(!res.ok || !data.url) throw new Error(data.message || 'Échec');
+    if(!res.ok || !data.url) throw new Error(data.message || ('Erreur HTTP ' + res.status));
     window.location.href = data.url;
   }catch(e){
-    alert("Le paiement automatique n'est pas disponible pour le moment. Essayez une des options ci-dessous.");
+    alert("Détail : " + (e.message || 'erreur inconnue'));
     btn.disabled = false;
     btn.textContent = '💳 Payer maintenant (Wave, Orange Money, Carte…)';
   }
