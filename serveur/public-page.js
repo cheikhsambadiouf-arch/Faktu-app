@@ -78,8 +78,12 @@ function renderPublicOrderPage(token) {
 
     <div id="payment-section" class="card" style="display:none;">
       <div style="font-weight:700;margin-bottom:10px;">Paiement</div>
+      <div id="paydunya-section" style="display:none;">
+        <button class="btn-primary" onclick="payWithPaydunya()" id="paydunya-btn">💳 Payer maintenant (Wave, Orange Money, Carte…)</button>
+        <div class="muted" style="text-align:center;margin:10px 0;">— ou, si vous préférez —</div>
+      </div>
       <div id="pay-links"></div>
-      <button class="btn-outline" onclick="reportPayment()" id="report-btn">J'ai payé</button>
+      <button class="btn-outline" onclick="reportPayment()" id="report-btn">J'ai déjà payé directement</button>
     </div>
 
     <div id="payment-reported" class="card" style="display:none;text-align:center;">
@@ -145,10 +149,27 @@ function render(){
     document.getElementById('payment-reported').style.display='block';
   }else{
     document.getElementById('payment-section').style.display='block';
+    if(d.paydunya_available) document.getElementById('paydunya-section').style.display='block';
     const links = [];
-    if(d.company.wave_payment_link) links.push(\`<a href="\${d.company.wave_payment_link}" target="_blank" style="text-decoration:none;"><button class="btn-primary" type="button">Payer avec Wave</button></a>\`);
+    if(d.company.wave_payment_link) links.push(\`<a href="\${d.company.wave_payment_link}" target="_blank" style="text-decoration:none;"><button class="btn-outline" type="button">Payer avec Wave</button></a>\`);
     if(d.company.om_merchant_number) links.push(\`<div class="muted" style="margin:8px 0;text-align:center;">Ou Orange Money au \${escapeHtml(d.company.om_merchant_number)}</div>\`);
-    document.getElementById('pay-links').innerHTML = links.join('') || '<div class="muted">Contactez le vendeur pour connaître les moyens de paiement disponibles.</div>';
+    document.getElementById('pay-links').innerHTML = links.join('') || (d.paydunya_available ? '' : '<div class="muted">Contactez le vendeur pour connaître les moyens de paiement disponibles.</div>');
+  }
+}
+
+async function payWithPaydunya(){
+  const btn = document.getElementById('paydunya-btn');
+  btn.disabled = true;
+  btn.textContent = 'Préparation du paiement...';
+  try{
+    const res = await fetch(\`\${API}/api/public/orders/\${TOKEN}/paydunya-checkout\`, {method:'POST'});
+    const data = await res.json();
+    if(!res.ok || !data.url) throw new Error(data.message || 'Échec');
+    window.location.href = data.url;
+  }catch(e){
+    alert("Le paiement automatique n'est pas disponible pour le moment. Essayez une des options ci-dessous.");
+    btn.disabled = false;
+    btn.textContent = '💳 Payer maintenant (Wave, Orange Money, Carte…)';
   }
 }
 
