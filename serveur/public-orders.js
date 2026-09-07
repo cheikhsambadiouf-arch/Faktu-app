@@ -51,6 +51,7 @@ async function handlePublicGetOrder(req, res, { json, params }) {
     });
   }
 
+  // kind === 'invoice'
   const items = db.prepare('SELECT description, qty, unit_price FROM invoice_items WHERE invoice_id = ? ORDER BY sort_order').all(record.id);
   const totals = computeTotals(items, record.discount_pct, record.tva_rate);
   json(res, 200, {
@@ -125,6 +126,7 @@ async function handlePublicPaydunyaCheckout(req, res, { json, params }) {
     db.prepare(`UPDATE ${table} SET paydunya_token=? WHERE id=?`).run(checkout.token, found.record.id);
     json(res, 200, { url: checkout.url });
   } catch (e) {
+    console.error('[PayDunya checkout]', e.message);
     json(res, 502, { message: e.message || 'Échec de connexion à PayDunya' });
   }
 }
