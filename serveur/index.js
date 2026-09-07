@@ -21,7 +21,10 @@ const {
   handleAssignDriver: handleSaleAssignDriver, handleMarkDelivered: handleSaleDelivered, handleDeleteSale,
   handleGenerateLink: handleSaleGenerateLink
 } = require('./sales');
-const { handlePublicGetOrder, handlePublicValidate, handlePublicReportPayment } = require('./public-orders');
+const {
+  handlePublicGetOrder, handlePublicValidate, handlePublicReportPayment,
+  handlePublicPaydunyaCheckout, handlePaydunyaIPN
+} = require('./public-orders');
 const { renderPublicOrderPage } = require('./public-page');
 
 const PORT = process.env.PORT || 3000;
@@ -53,6 +56,18 @@ function readBody(req) {
     });
     req.on('end', () => {
       if (!data) return resolve({});
+      const contentType = req.headers['content-type'] || '';
+      if (contentType.includes('application/x-www-form-urlencoded')) {
+        // Format utilisé par la notification IPN de PayDunya, pas du JSON.
+        try {
+          const parsed = {};
+          for (const pair of data.split('&')) {
+            const [k, v] = pair.split('=');
+            parsed[decodeURIComponent(k)] = decodeURIComponent((v || '').replace(/\+/g, ' '));
+          }
+          return resolve(parsed);
+        } catch { return reject(new Error('Corps invalide')); }
+      }
       try { resolve(JSON.parse(data)); }
       catch { reject(new Error('JSON invalide')); }
     });
@@ -187,7 +202,9 @@ const routes = [
   // depuis WhatsApp, sans jamais avoir besoin d'un compte FAKTU.
   { method: 'GET', path: '/api/public/orders/:token', handler: handlePublicGetOrder },
   { method: 'POST', path: '/api/public/orders/:token/validate', parseBody: true, handler: handlePublicValidate },
-  { method: 'POST', path: '/api/public/orders/:token/payment-reported', handler: handlePublicReportPayment }
+  { method: 'POST', path: '/api/public/orders/:token/payment-reported', handler: handlePublicReportPayment },
+  { method: 'POST', path: '/api/public/orders/:token/paydunya-checkout', handler: handlePublicPaydunyaCheckout },
+  { method: 'POST', path: '/api/paydunya/ipn', parseBody: true, handler: handlePaydunyaIPN }
 ];
 
 function matchRoute(method, pathname) {
