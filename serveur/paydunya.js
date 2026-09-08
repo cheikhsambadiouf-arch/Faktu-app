@@ -59,4 +59,16 @@ function verifyHash(receivedHash) {
   return receivedHash === expected;
 }
 
-module.exports = { isConfigured, createCheckout, verifyHash, MODE };
+// Interroge PayDunya directement pour savoir si une facture a réellement été
+// payée — utilisé en complément (voire en remplacement, si l'IPN ne nous
+// parvient pas de façon fiable) de la notification automatique : on vérifie
+// nous-mêmes plutôt que d'attendre passivement.
+async function confirmInvoice(invoiceToken) {
+  const res = await fetch(`${BASE_URL}/checkout-invoice/confirm/${invoiceToken}`, {
+    method: 'GET', headers: headers()
+  });
+  const data = await res.json().catch(() => ({}));
+  return data;
+}
+
+module.exports = { isConfigured, createCheckout, verifyHash, confirmInvoice, MODE };
