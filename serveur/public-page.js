@@ -110,10 +110,23 @@ async function load(){
     if(!res.ok) throw new Error('not found');
     orderData = await res.json();
     render();
+    if(orderData.client_validated && orderData.payment_status !== 'payé') checkPaymentStatus();
   }catch(e){
     document.getElementById('loading').style.display='none';
     document.getElementById('error').style.display='block';
   }
+}
+
+async function checkPaymentStatus(){
+  try{
+    const res = await fetch(\`\${API}/api/public/orders/\${TOKEN}/check-payment\`);
+    const data = await res.json();
+    if(data.paid){
+      const res2 = await fetch(\`\${API}/api/public/orders/\${TOKEN}\`);
+      orderData = await res2.json();
+      render();
+    }
+  }catch(e){ /* pas grave : le paiement reste vérifiable plus tard */ }
 }
 
 function render(){
