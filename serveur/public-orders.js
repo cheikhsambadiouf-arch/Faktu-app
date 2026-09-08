@@ -51,7 +51,6 @@ async function handlePublicGetOrder(req, res, { json, params }) {
     });
   }
 
-  // kind === 'invoice'
   const items = db.prepare('SELECT description, qty, unit_price FROM invoice_items WHERE invoice_id = ? ORDER BY sort_order').all(record.id);
   const totals = computeTotals(items, record.discount_pct, record.tva_rate);
   json(res, 200, {
@@ -131,29 +130,85 @@ async function handlePublicPaydunyaCheckout(req, res, { json, params }) {
   }
 }
 
-async function handlePaydunyaIPN(req, res, { json, body }) {
-  let payload;
-  try { payload = JSON.parse(body.data); } catch { return json(res, 400, { message: 'Corps invalide' }); }
+function markOrderPaid(found, amount) {
+  const table = found.kind === 'sale' ? 'sales' : 'invoices';
+  const paymentField = table === 'sales' ? 'payment_status' : 'status';
+  const paidValue = table === 'sales' ? 'payé' : 'paye';
+  db.prepare(`UPDATE ${table} SET ${paymentField}=?, amount_paid=?, payment_method='PayDunya', payment_date=?, updated_at=? WHERE id=?`)
+    .run(paidValue, amount, new Date().toISOString().slice(0, 10), Date.now(), found.record.id);
+}
 
-  if (!paydunya.verifyHash(payload.hash)) return json(res, 403, { message: 'Signature invalide' });
-  if (payload.status !== 'completed') return json(res, 200, { ok: true });
+// Le client revient sur cette page juste après avoir payé (ou annulé) sur
+// PayDunya — on en profite pour vérifier nous-mêmes activement le statut
+// réel du paiement auprès de PayDunya, plutôt que de dépendre uniquement
+// d'une notification automatique qui peut être retardée ou ne jamais
+// arriver selon la configuration réseau de l'hébergeur.
+async function handlePublicCheckPayment(req, res, { json, params }) {
+  const found = findByToken(params.token);
+  if (!found) return json(res, 404, { message: 'Commande introuvable ou lien expiré' });
+
+  if (found.record.payment_status === 'payé' || found.record.status === 'paye') {
+    return json(res, 200, { paid: true });
+  }
+  if (!found.record.paydunya_token || !paydunya.isConfigured()) {
+    return json(res, 200, { paid: false });
+  }
+
+  try {
+    const data = await paydunya.confirmInvoice(found.record.paydunya_token);
+    console.log('[PayDunya check] Réponse confirm:', JSON.stringify(data).slice(0, 500));
+
+    const status = (data.status) || (data.invoice && data.invoice.status) || '';
+    const amount = Number((data.invoice && data.invoice.total_amount) || 0);
+    const isPaid = data.response_code === '00' && (status === 'completed' || status === 'paid' || status === 'complété');
+
+    if (isPaid) {
+      markOrderPaid(found, amount || getItemsAndTotal(found).total);
+      return json(res, 200, { paid: true });
+    }
+    json(res, 200, { paid: false, status });
+  } catch (e) {
+    console.error('[PayDunya check] Erreur:', e.message);
+    json(res, 200, { paid: false });
+  }
+}
+
+async function handlePaydunyaIPN(req, res, { json, body }) {
+  console.log('[PayDunya IPN] Requête reçue. Corps brut:', JSON.stringify(body).slice(0, 500));
+
+  let payload;
+  try { payload = JSON.parse(body.data); } catch (e) {
+    console.error('[PayDunya IPN] Corps invalide, impossible de parser "data":', e.message);
+    return json(res, 400, { message: 'Corps invalide' });
+  }
+
+  console.log('[PayDunya IPN] status =', payload.status, '| custom_data =', JSON.stringify(payload.custom_data));
+
+  if (!paydunya.verifyHash(payload.hash)) {
+    console.error('[PayDunya IPN] Signature invalide — hash reçu ne correspond pas à la Master Key configurée.');
+    return json(res, 403, { message: 'Signature invalide' });
+  }
+  if (payload.status !== 'completed') {
+    console.log('[PayDunya IPN] Statut différent de "completed", ignoré:', payload.status);
+    return json(res, 200, { ok: true });
+  }
 
   const orderToken = payload.custom_data && payload.custom_data.order_token;
   const found = orderToken && findByToken(orderToken);
-  if (!found) return json(res, 200, { ok: true });
+  if (!found) {
+    console.error('[PayDunya IPN] Jeton de commande introuvable dans notre base:', orderToken);
+    return json(res, 200, { ok: true });
+  }
 
   const table = found.kind === 'sale' ? 'sales' : 'invoices';
   const amount = Number(payload.invoice && payload.invoice.total_amount) || 0;
-  const paymentField = table === 'sales' ? 'payment_status' : 'status';
-  const paidValue = table === 'sales' ? 'payé' : 'paye';
+  markOrderPaid(found, amount);
 
-  db.prepare(`UPDATE ${table} SET ${paymentField}=?, amount_paid=?, payment_method='PayDunya', payment_date=?, updated_at=? WHERE id=?`)
-    .run(paidValue, amount, new Date().toISOString().slice(0, 10), Date.now(), found.record.id);
-
+  console.log('[PayDunya IPN] Commande marquée payée avec succès:', orderToken, '| montant:', amount);
   json(res, 200, { ok: true });
 }
 
 module.exports = {
   ensureToken, findByToken, handlePublicGetOrder, handlePublicValidate, handlePublicReportPayment,
-  handlePublicPaydunyaCheckout, handlePaydunyaIPN
+  handlePublicPaydunyaCheckout, handlePaydunyaIPN, handlePublicCheckPayment
 };
