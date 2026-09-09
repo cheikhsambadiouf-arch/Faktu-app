@@ -14,18 +14,20 @@ const { handleListDrivers, handleCreateDriver, handleDeleteDriver } = require('.
 const {
   handleListInvoices, handleGetInvoice, handleCreateInvoice, handleRecordPayment: handleInvoicePayment,
   handleAssignDriver: handleInvoiceAssignDriver, handleMarkDelivered: handleInvoiceDelivered, handleDeleteInvoice,
-  handleGenerateLink: handleInvoiceGenerateLink
+  handleGenerateLink: handleInvoiceGenerateLink, handleGenerateDriverLink: handleInvoiceGenerateDriverLink
 } = require('./invoices');
 const {
   handleListSales, handleGetSale, handleCreateSale, handleRecordPayment: handleSalePayment,
   handleAssignDriver: handleSaleAssignDriver, handleMarkDelivered: handleSaleDelivered, handleDeleteSale,
-  handleGenerateLink: handleSaleGenerateLink
+  handleGenerateLink: handleSaleGenerateLink, handleGenerateDriverLink: handleSaleGenerateDriverLink
 } = require('./sales');
 const {
   handlePublicGetOrder, handlePublicValidate, handlePublicReportPayment,
-  handlePublicPaydunyaCheckout, handlePaydunyaIPN, handlePublicCheckPayment
+  handlePublicPaydunyaCheckout, handlePaydunyaIPN, handlePublicCheckPayment,
+  handlePublicGetDelivery, handleDriverConfirmDelivery, handlePublicClientConfirmDelivery
 } = require('./public-orders');
 const { renderPublicOrderPage } = require('./public-page');
+const { renderDeliveryPage } = require('./delivery-page');
 
 const PORT = process.env.PORT || 3000;
 const MAX_LOGIN_ATTEMPTS = 5;
@@ -58,6 +60,7 @@ function readBody(req) {
       if (!data) return resolve({});
       const contentType = req.headers['content-type'] || '';
       if (contentType.includes('application/x-www-form-urlencoded')) {
+        // Format utilisé par la notification IPN de PayDunya, pas du JSON.
         try {
           const parsed = {};
           for (const pair of data.split('&')) {
@@ -77,6 +80,8 @@ function readBody(req) {
 function isValidPhone(phone) {
   return typeof phone === 'string' && /^[0-9+][0-9 ]{6,14}$/.test(phone.trim());
 }
+
+// ---- Handlers Phase 1 (authentification) — inchangés, déjà testés ----
 
 async function handleRegister(req, res) {
   let body;
@@ -113,6 +118,7 @@ async function handleLogin(req, res) {
   const password = body.password || '';
   if (!phone || !password) return json(res, 400, { message: 'Numéro de téléphone et mot de passe requis' });
 
+  // Anti-bruteforce, même logique que côté client (5 tentatives -> verrouillage 60s)
   const lock = db.prepare('SELECT * FROM login_attempts WHERE phone = ?').get(phone);
   if (lock && lock.locked_until && lock.locked_until > Date.now()) {
     const secondsLeft = Math.ceil((lock.locked_until - Date.now()) / 1000);
@@ -131,6 +137,7 @@ async function handleLogin(req, res) {
     return json(res, 401, { message: 'Numéro ou mot de passe incorrect' });
   }
 
+  // Connexion réussie : on remet le compteur à zéro
   db.prepare('DELETE FROM login_attempts WHERE phone = ?').run(phone);
 
   const token = signToken({ uid: user.id });
@@ -142,6 +149,14 @@ async function handleMe(req, res) {
   if (!user) return json(res, 401, { message: 'Non authentifié' });
   json(res, 200, { user });
 }
+
+// ---- Routeur ----
+// Deux styles de route cohabitent :
+//  - "legacy" (Phase 1, déjà testée) : handler(req, res), gère elle-même son
+//    corps de requête et son authentification.
+//  - "standard" (Phase 2+) : handler(req, res, ctx) où ctx fournit déjà
+//    { json, user, body, params } — l'authentification et le parsing JSON
+//    sont gérés une seule fois par le routeur.
 
 const routes = [
   { method: 'POST', path: '/api/auth/register', legacy: handleRegister },
@@ -173,6 +188,7 @@ const routes = [
   { method: 'POST', path: '/api/invoices/:id/delivered', auth: true, handler: handleInvoiceDelivered },
   { method: 'DELETE', path: '/api/invoices/:id', auth: true, handler: handleDeleteInvoice },
   { method: 'POST', path: '/api/invoices/:id/link', auth: true, handler: handleInvoiceGenerateLink },
+  { method: 'POST', path: '/api/invoices/:id/driver-link', auth: true, handler: handleInvoiceGenerateDriverLink },
 
   { method: 'GET', path: '/api/sales', auth: true, handler: handleListSales },
   { method: 'GET', path: '/api/sales/:id', auth: true, handler: handleGetSale },
@@ -182,13 +198,24 @@ const routes = [
   { method: 'POST', path: '/api/sales/:id/delivered', auth: true, handler: handleSaleDelivered },
   { method: 'DELETE', path: '/api/sales/:id', auth: true, handler: handleDeleteSale },
   { method: 'POST', path: '/api/sales/:id/link', auth: true, handler: handleSaleGenerateLink },
+  { method: 'POST', path: '/api/sales/:id/driver-link', auth: true, handler: handleSaleGenerateDriverLink },
 
+  // Routes publiques : aucune authentification, protégées uniquement par le
+  // jeton non-devinable dans l'URL. Fonctionnent aussi bien pour une vente
+  // directe que pour une facture classique — c'est ce que le client ouvre
+  // depuis WhatsApp, sans jamais avoir besoin d'un compte FAKTU.
   { method: 'GET', path: '/api/public/orders/:token', handler: handlePublicGetOrder },
   { method: 'POST', path: '/api/public/orders/:token/validate', parseBody: true, handler: handlePublicValidate },
   { method: 'POST', path: '/api/public/orders/:token/payment-reported', handler: handlePublicReportPayment },
   { method: 'POST', path: '/api/public/orders/:token/paydunya-checkout', handler: handlePublicPaydunyaCheckout },
   { method: 'GET', path: '/api/public/orders/:token/check-payment', handler: handlePublicCheckPayment },
-  { method: 'POST', path: '/api/paydunya/ipn', parseBody: true, handler: handlePaydunyaIPN }
+  { method: 'POST', path: '/api/public/orders/:token/confirm-delivery', handler: handlePublicClientConfirmDelivery },
+  { method: 'POST', path: '/api/paydunya/ipn', parseBody: true, handler: handlePaydunyaIPN },
+
+  // Lien public du livreur — jeton distinct de celui du client, pour la
+  // double confirmation de livraison.
+  { method: 'GET', path: '/api/public/delivery/:token', handler: handlePublicGetDelivery },
+  { method: 'POST', path: '/api/public/delivery/:token/confirm', handler: handleDriverConfirmDelivery }
 ];
 
 function matchRoute(method, pathname) {
@@ -216,6 +243,10 @@ const server = http.createServer((req, res) => {
   if (req.method === 'GET' && url.pathname.startsWith('/order/')) {
     const token = decodeURIComponent(url.pathname.slice('/order/'.length));
     return html(res, 200, renderPublicOrderPage(token));
+  }
+  if (req.method === 'GET' && url.pathname.startsWith('/delivery/')) {
+    const token = decodeURIComponent(url.pathname.slice('/delivery/'.length));
+    return html(res, 200, renderDeliveryPage(token));
   }
 
   const found = matchRoute(req.method, url.pathname);
