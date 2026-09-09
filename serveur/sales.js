@@ -6,7 +6,7 @@ const db = require('./db');
 const { getOrCreateCompany } = require('./companies');
 const { nextNumber } = require('./numbering');
 const { findOwnedDriver } = require('./drivers');
-const { ensureToken } = require('./public-orders');
+const { ensureToken, ensureDriverToken } = require('./public-orders');
 
 function computeTotals(items, tvaRate) {
   const subtotal = items.reduce((s, it) => s + (Number(it.qty) || 0) * (Number(it.unit_price) || 0), 0);
@@ -143,8 +143,15 @@ async function handleGenerateLink(req, res, { json, user, params }) {
   json(res, 200, { token: ensureToken('sales', sale) });
 }
 
+async function handleGenerateDriverLink(req, res, { json, user, params }) {
+  const company = getOrCreateCompany(user.id);
+  const sale = ownedSale(company.id, params.id);
+  if (!sale) return json(res, 404, { message: 'Vente introuvable' });
+  json(res, 200, { token: ensureDriverToken('sales', sale) });
+}
+
 module.exports = {
   handleListSales, handleGetSale, handleCreateSale, handleRecordPayment,
   handleAssignDriver, handleMarkDelivered, handleDeleteSale,
-  handleGenerateLink
+  handleGenerateLink, handleGenerateDriverLink
 };
