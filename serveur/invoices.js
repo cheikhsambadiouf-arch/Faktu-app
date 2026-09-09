@@ -8,7 +8,7 @@ const db = require('./db');
 const { getOrCreateCompany } = require('./companies');
 const { nextNumber } = require('./numbering');
 const { findOwnedDriver } = require('./drivers');
-const { ensureToken } = require('./public-orders');
+const { ensureToken, ensureDriverToken } = require('./public-orders');
 
 const VALID_TYPES = ['FAC', 'PRO', 'BC', 'BL'];
 
@@ -161,7 +161,14 @@ async function handleGenerateLink(req, res, { json, user, params }) {
   json(res, 200, { token: ensureToken('invoices', invoice) });
 }
 
+async function handleGenerateDriverLink(req, res, { json, user, params }) {
+  const company = getOrCreateCompany(user.id);
+  const invoice = ownedInvoice(company.id, params.id);
+  if (!invoice) return json(res, 404, { message: 'Facture introuvable' });
+  json(res, 200, { token: ensureDriverToken('invoices', invoice) });
+}
+
 module.exports = {
   handleListInvoices, handleGetInvoice, handleCreateInvoice, handleRecordPayment,
-  handleAssignDriver, handleMarkDelivered, handleDeleteInvoice, handleGenerateLink
+  handleAssignDriver, handleMarkDelivered, handleDeleteInvoice, handleGenerateLink, handleGenerateDriverLink
 };
