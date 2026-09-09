@@ -94,6 +94,18 @@ function renderPublicOrderPage(token) {
     <div id="already-paid" class="card" style="display:none;text-align:center;">
       <span class="badge ok">✓ Payé</span>
     </div>
+
+    <div id="delivery-confirm-section" class="card" style="display:none;text-align:center;">
+      <div style="font-weight:700;margin-bottom:6px;">Avez-vous bien reçu votre commande ?</div>
+      <div class="muted">Le livreur devra aussi confirmer de son côté.</div>
+      <button class="btn-primary" onclick="confirmMyDelivery()" id="delivery-confirm-btn">✓ J'ai bien reçu ma commande</button>
+    </div>
+    <div id="delivery-waiting-driver" class="card" style="display:none;text-align:center;">
+      <span class="badge wait">⏳ En attente de confirmation du livreur</span>
+    </div>
+    <div id="delivery-done" class="card" style="display:none;text-align:center;">
+      <span class="badge ok">✓ Commande livrée</span>
+    </div>
   </div>
 </div>
 
@@ -167,6 +179,35 @@ function render(){
     if(d.company.wave_payment_link) links.push(\`<a href="\${d.company.wave_payment_link}" target="_blank" style="text-decoration:none;"><button class="btn-outline" type="button">Payer avec Wave</button></a>\`);
     if(d.company.om_merchant_number) links.push(\`<div class="muted" style="margin:8px 0;text-align:center;">Ou Orange Money au \${escapeHtml(d.company.om_merchant_number)}</div>\`);
     document.getElementById('pay-links').innerHTML = links.join('') || (d.paydunya_available ? '' : '<div class="muted">Contactez le vendeur pour connaître les moyens de paiement disponibles.</div>');
+  }
+
+  // Confirmation de livraison : uniquement pertinent si un livreur a été
+  // assigné (delivery_status renseigné) côté vendeur.
+  if(d.delivery_status && d.delivery_status !== 'livrée'){
+    if(d.client_confirmed_delivery){
+      document.getElementById('delivery-waiting-driver').style.display='block';
+    }else{
+      document.getElementById('delivery-confirm-section').style.display='block';
+    }
+  }else if(d.delivery_status === 'livrée'){
+    document.getElementById('delivery-done').style.display='block';
+  }
+}
+
+async function confirmMyDelivery(){
+  const btn = document.getElementById('delivery-confirm-btn');
+  btn.disabled = true;
+  btn.textContent = 'Confirmation...';
+  try{
+    const res = await fetch(\`\${API}/api/public/orders/\${TOKEN}/confirm-delivery\`, {method:'POST'});
+    const data = await res.json();
+    document.getElementById('delivery-confirm-section').style.display='none';
+    if(data.delivered) document.getElementById('delivery-done').style.display='block';
+    else document.getElementById('delivery-waiting-driver').style.display='block';
+  }catch(e){
+    alert('Une erreur est survenue, réessayez.');
+    btn.disabled = false;
+    btn.textContent = "✓ J'ai bien reçu ma commande";
   }
 }
 
