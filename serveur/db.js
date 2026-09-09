@@ -123,6 +123,9 @@ CREATE TABLE IF NOT EXISTS invoices (
   payment_date TEXT,
   driver_id TEXT REFERENCES drivers(id) ON DELETE SET NULL,
   delivery_status TEXT,
+  driver_token TEXT UNIQUE,
+  driver_confirmed_at INTEGER,
+  client_confirmed_delivery_at INTEGER,
   public_token TEXT UNIQUE,
   paydunya_token TEXT,
   client_validated INTEGER NOT NULL DEFAULT 0,
@@ -136,6 +139,7 @@ CREATE TABLE IF NOT EXISTS invoices (
 );
 CREATE INDEX IF NOT EXISTS idx_invoices_company ON invoices(company_id);
 CREATE INDEX IF NOT EXISTS idx_invoices_public_token ON invoices(public_token);
+CREATE INDEX IF NOT EXISTS idx_invoices_driver_token ON invoices(driver_token);
 
 CREATE TABLE IF NOT EXISTS invoice_items (
   id TEXT PRIMARY KEY,
@@ -163,6 +167,9 @@ CREATE TABLE IF NOT EXISTS sales (
   payment_date TEXT,
   driver_id TEXT REFERENCES drivers(id) ON DELETE SET NULL,
   delivery_status TEXT,
+  driver_token TEXT UNIQUE,
+  driver_confirmed_at INTEGER,
+  client_confirmed_delivery_at INTEGER,
   public_token TEXT UNIQUE,
   paydunya_token TEXT,
   client_validated INTEGER NOT NULL DEFAULT 0,
@@ -176,6 +183,7 @@ CREATE TABLE IF NOT EXISTS sales (
 );
 CREATE INDEX IF NOT EXISTS idx_sales_company ON sales(company_id);
 CREATE INDEX IF NOT EXISTS idx_sales_public_token ON sales(public_token);
+CREATE INDEX IF NOT EXISTS idx_sales_driver_token ON sales(driver_token);
 
 CREATE TABLE IF NOT EXISTS sale_items (
   id TEXT PRIMARY KEY,
