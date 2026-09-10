@@ -7,7 +7,7 @@ const crypto = require('crypto');
 const db = require('./db');
 const { hashPassword, verifyPassword, signToken } = require('./auth-utils');
 const { getAuthUser } = require('./middleware');
-const { handleGetCompany, handleUpdateCompany } = require('./companies');
+const { handleGetCompany, handleUpdateCompany, handleSetStoreSlug, handleToggleLive } = require('./companies');
 const { handleListClients, handleCreateClient, handleUpdateClient, handleDeleteClient } = require('./clients');
 const { handleListProducts, handleCreateProduct, handleUpdateProduct, handleDeleteProduct } = require('./products');
 const { handleListDrivers, handleCreateDriver, handleDeleteDriver } = require('./drivers');
@@ -24,10 +24,12 @@ const {
 const {
   handlePublicGetOrder, handlePublicValidate, handlePublicReportPayment,
   handlePublicPaydunyaCheckout, handlePaydunyaIPN, handlePublicCheckPayment,
-  handlePublicGetDelivery, handleDriverConfirmDelivery, handlePublicClientConfirmDelivery
+  handlePublicGetDelivery, handleDriverConfirmDelivery, handlePublicClientConfirmDelivery,
+  handlePublicGetStore, handlePublicCreateStoreOrder
 } = require('./public-orders');
 const { renderPublicOrderPage } = require('./public-page');
 const { renderDeliveryPage } = require('./delivery-page');
+const { renderStorePage } = require('./store-page');
 
 const PORT = process.env.PORT || 3000;
 const MAX_LOGIN_ATTEMPTS = 5;
@@ -165,6 +167,8 @@ const routes = [
 
   { method: 'GET', path: '/api/company', auth: true, handler: handleGetCompany },
   { method: 'PUT', path: '/api/company', auth: true, parseBody: true, handler: handleUpdateCompany },
+  { method: 'POST', path: '/api/company/store-slug', auth: true, parseBody: true, handler: handleSetStoreSlug },
+  { method: 'POST', path: '/api/company/live', auth: true, parseBody: true, handler: handleToggleLive },
 
   { method: 'GET', path: '/api/clients', auth: true, handler: handleListClients },
   { method: 'POST', path: '/api/clients', auth: true, parseBody: true, handler: handleCreateClient },
@@ -215,7 +219,12 @@ const routes = [
   // Lien public du livreur — jeton distinct de celui du client, pour la
   // double confirmation de livraison.
   { method: 'GET', path: '/api/public/delivery/:token', handler: handlePublicGetDelivery },
-  { method: 'POST', path: '/api/public/delivery/:token/confirm', handler: handleDriverConfirmDelivery }
+  { method: 'POST', path: '/api/public/delivery/:token/confirm', handler: handleDriverConfirmDelivery },
+
+  // Boutique live : lien permanent où le client choisit un produit et
+  // commande directement, sans jamais avoir le numéro du vendeur.
+  { method: 'GET', path: '/api/public/store/:slug', handler: handlePublicGetStore },
+  { method: 'POST', path: '/api/public/store/:slug/order', parseBody: true, handler: handlePublicCreateStoreOrder }
 ];
 
 function matchRoute(method, pathname) {
@@ -247,6 +256,10 @@ const server = http.createServer((req, res) => {
   if (req.method === 'GET' && url.pathname.startsWith('/delivery/')) {
     const token = decodeURIComponent(url.pathname.slice('/delivery/'.length));
     return html(res, 200, renderDeliveryPage(token));
+  }
+  if (req.method === 'GET' && url.pathname.startsWith('/l/')) {
+    const slug = decodeURIComponent(url.pathname.slice('/l/'.length));
+    return html(res, 200, renderStorePage(slug));
   }
 
   const found = matchRoute(req.method, url.pathname);
