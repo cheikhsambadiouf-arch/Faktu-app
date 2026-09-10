@@ -46,6 +46,8 @@ CREATE TABLE IF NOT EXISTS companies (
   theme_accent TEXT,
   wave_payment_link TEXT,
   om_merchant_number TEXT,
+  store_slug TEXT UNIQUE,
+  live_active INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL
 );
 
@@ -67,6 +69,7 @@ CREATE TABLE IF NOT EXISTS clients (
   updated_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_clients_company ON clients(company_id);
+CREATE INDEX IF NOT EXISTS idx_companies_store_slug ON companies(store_slug);
 
 CREATE TABLE IF NOT EXISTS products (
   id TEXT PRIMARY KEY,
