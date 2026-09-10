@@ -128,6 +128,16 @@ function getItemsAndTotal(found) {
   return { items, ...computeTotals(items, record.discount_pct, record.tva_rate) };
 }
 
+// Montant qu'il reste réellement à payer, en tenant compte des acomptes déjà
+// encaissés manuellement (ou lors d'un précédent essai) — on ne doit jamais
+// faire payer au client le total complet une deuxième fois via PayDunya s'il
+// a déjà réglé une partie de la commande autrement.
+function getRemainingDue(found) {
+  const { total } = getItemsAndTotal(found);
+  const alreadyPaid = Number(found.record.amount_paid) || 0;
+  return Math.max(0, total - alreadyPaid);
+}
+
 // Le client choisit lui-même son moyen de paiement (Wave, Orange Money,
 // carte...) sur la page hébergée par PayDunya — rien de tout ça ne dépend
 // des liens/numéros que le vendeur a configurés dans FAKTU.
@@ -138,14 +148,22 @@ async function handlePublicPaydunyaCheckout(req, res, { json, params }) {
 
   const company = db.prepare('SELECT name FROM companies WHERE id = ?').get(found.record.company_id);
   const { items, total } = getItemsAndTotal(found);
+  const amountDue = getRemainingDue(found);
+  if (amountDue <= 0) return json(res, 400, { message: 'Cette commande est déjà payée' });
+  // Si un acompte a déjà été réglé (hors PayDunya), on ne peut pas répartir
+  // ce partiel sur les lignes d'origine : on envoie une ligne unique pour le
+  // solde restant plutôt que de faire payer le total au client une seconde fois.
+  const checkoutItems = amountDue < total
+    ? [{ description: `Solde restant — commande ${found.record.number}`, qty: 1, unit_price: amountDue }]
+    : items;
   const baseUrl = `https://${req.headers.host}`;
 
   try {
     const checkout = await paydunya.createCheckout({
       companyName: company.name,
-      totalAmount: total,
+      totalAmount: amountDue,
       description: `Commande ${found.record.number}`,
-      items,
+      items: checkoutItems,
       publicToken: params.token,
       ipnUrl: `${baseUrl}/api/paydunya/ipn`,
       returnUrl: `${baseUrl}/order/${params.token}`
@@ -164,12 +182,22 @@ async function handlePublicPaydunyaCheckout(req, res, { json, params }) {
 // sans que le vendeur ait quoi que ce soit à confirmer manuellement.
 // Marque une commande comme payée dans notre base — utilisé aussi bien par
 // l'IPN (passif) que par la vérification active (voir plus bas).
-function markOrderPaid(found, amount) {
+function markOrderPaid(found, amountJustPaid) {
   const table = found.kind === 'sale' ? 'sales' : 'invoices';
   const paymentField = table === 'sales' ? 'payment_status' : 'status';
-  const paidValue = table === 'sales' ? 'payé' : 'paye';
+  const { total } = getItemsAndTotal(found);
+  const alreadyPaid = Number(found.record.amount_paid) || 0;
+  // On ADDITIONNE au montant déjà encaissé (jamais un simple remplacement) :
+  // le checkout PayDunya n'est créé que pour le solde restant (voir
+  // getRemainingDue), donc ce paiement vient toujours compléter, jamais
+  // remplacer, ce qui a déjà pu être réglé par un autre moyen.
+  const amountPaid = Math.min(total, alreadyPaid + (Number(amountJustPaid) || 0));
+  const isFullyPaid = amountPaid >= total;
+  const paidValue = table === 'sales'
+    ? (isFullyPaid ? 'payé' : 'partiel')
+    : (isFullyPaid ? 'paye' : 'partiel');
   db.prepare(`UPDATE ${table} SET ${paymentField}=?, amount_paid=?, payment_method='PayDunya', payment_date=?, updated_at=? WHERE id=?`)
-    .run(paidValue, amount, new Date().toISOString().slice(0, 10), Date.now(), found.record.id);
+    .run(paidValue, amountPaid, new Date().toISOString().slice(0, 10), Date.now(), found.record.id);
 }
 
 // Le client revient sur cette page juste après avoir payé (ou annulé) sur
@@ -197,7 +225,7 @@ async function handlePublicCheckPayment(req, res, { json, params }) {
     const isPaid = data.response_code === '00' && (status === 'completed' || status === 'paid' || status === 'complété');
 
     if (isPaid) {
-      markOrderPaid(found, amount || getItemsAndTotal(found).total);
+      markOrderPaid(found, amount || getRemainingDue(found));
       return json(res, 200, { paid: true });
     }
     json(res, 200, { paid: false, status });
@@ -235,9 +263,8 @@ async function handlePaydunyaIPN(req, res, { json, body }) {
     return json(res, 200, { ok: true });
   }
 
-  const table = found.kind === 'sale' ? 'sales' : 'invoices';
   const amount = Number(payload.invoice && payload.invoice.total_amount) || 0;
-  markOrderPaid(found, amount);
+  markOrderPaid(found, amount || getRemainingDue(found));
 
   console.log('[PayDunya IPN] Commande marquée payée avec succès:', orderToken, '| montant:', amount);
   json(res, 200, { ok: true });
@@ -266,6 +293,7 @@ async function handlePublicCreateStoreOrder(req, res, { json, params, body }) {
   if (!product) return json(res, 404, { message: 'Produit introuvable' });
 
   const qty = Math.max(1, Number(body.qty) || 1);
+  if (product.stock < qty) return json(res, 400, { message: 'Stock insuffisant pour ce produit' });
   const clientName = (body.client_name || '').trim();
   const clientPhone = (body.client_phone || '').trim();
   const clientAddress = (body.client_address || '').trim();
@@ -280,16 +308,25 @@ async function handlePublicCreateStoreOrder(req, res, { json, params, body }) {
   // partir du prix réel du produit dans notre base.
   const publicToken = crypto.randomBytes(24).toString('base64url');
 
-  db.prepare(`INSERT INTO sales
-    (id, company_id, number, date, client_name, client_phone, client_address, tva_rate,
-     payment_status, amount_paid, delivery_status, public_token, client_validated, client_validated_at,
-     deleted, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'impayé', 0, ?, ?, 1, ?, 0, ?, ?)`)
-    .run(id, company.id, number, new Date().toISOString().slice(0, 10),
-      clientName, clientPhone, clientAddress || null, deliveryStatus, publicToken, now, now, now);
+  db.exec('BEGIN');
+  try {
+    db.prepare(`INSERT INTO sales
+      (id, company_id, number, date, client_name, client_phone, client_address, tva_rate,
+       payment_status, amount_paid, delivery_status, public_token, client_validated, client_validated_at,
+       deleted, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'impayé', 0, ?, ?, 1, ?, 0, ?, ?)`)
+      .run(id, company.id, number, new Date().toISOString().slice(0, 10),
+        clientName, clientPhone, clientAddress || null, deliveryStatus, publicToken, now, now, now);
 
-  db.prepare('INSERT INTO sale_items (id, sale_id, description, qty, unit_price) VALUES (?, ?, ?, ?, ?)')
-    .run(crypto.randomUUID(), id, product.name, qty, product.price);
+    db.prepare('INSERT INTO sale_items (id, sale_id, description, qty, unit_price, product_id) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(crypto.randomUUID(), id, product.name, qty, product.price, product.id);
+
+    db.prepare('UPDATE products SET stock = stock - ?, updated_at = ? WHERE id = ?').run(qty, now, product.id);
+    db.exec('COMMIT');
+  } catch (e) {
+    db.exec('ROLLBACK');
+    throw e;
+  }
 
   json(res, 201, { token: publicToken });
 }

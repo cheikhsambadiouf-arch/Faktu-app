@@ -150,7 +150,8 @@ CREATE TABLE IF NOT EXISTS invoice_items (
   description TEXT NOT NULL,
   qty REAL NOT NULL DEFAULT 1,
   unit_price REAL NOT NULL DEFAULT 0,
-  sort_order INTEGER NOT NULL DEFAULT 0
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  product_id TEXT REFERENCES products(id) ON DELETE SET NULL
 );
 CREATE INDEX IF NOT EXISTS idx_invoice_items_invoice ON invoice_items(invoice_id);
 
@@ -193,9 +194,22 @@ CREATE TABLE IF NOT EXISTS sale_items (
   sale_id TEXT NOT NULL REFERENCES sales(id) ON DELETE CASCADE,
   description TEXT NOT NULL,
   qty REAL NOT NULL DEFAULT 1,
-  unit_price REAL NOT NULL DEFAULT 0
+  unit_price REAL NOT NULL DEFAULT 0,
+  product_id TEXT REFERENCES products(id) ON DELETE SET NULL
 );
 CREATE INDEX IF NOT EXISTS idx_sale_items_sale ON sale_items(sale_id);
 `);
+
+// Migration additive pour les bases déjà créées avant l'ajout de
+// "product_id" (CREATE TABLE IF NOT EXISTS ne modifie pas un schéma
+// existant) — sans product_id, le stock du catalogue n'était jamais
+// décrémenté par les factures/ventes, uniquement affiché.
+for (const table of ['invoice_items', 'sale_items']) {
+  try {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN product_id TEXT REFERENCES products(id) ON DELETE SET NULL`);
+  } catch (e) {
+    // Colonne déjà présente (base créée avec le schéma à jour) — normal.
+  }
+}
 
 module.exports = db;

@@ -57,9 +57,23 @@ async function handleCreateInvoice(req, res, { json, user, body }) {
   const type = VALID_TYPES.includes(body.type) ? body.type : 'FAC';
   const items = Array.isArray(body.items) ? body.items.filter(it => (it.description || '').trim()) : [];
   if (items.length === 0) return json(res, 400, { message: 'Au moins un article est requis' });
+
+  // Une ligne peut librement rester du texte libre (sans product_id) ; si
+  // elle référence un produit du catalogue, on vérifie la quantité en stock
+  // ici, avant transaction, pour la décrémenter au moment de l'insertion.
+  const resolvedItems = [];
   for (const it of items) {
     if (Number(it.qty) <= 0) return json(res, 400, { message: 'Quantité invalide sur un article' });
     if (Number(it.unit_price) < 0) return json(res, 400, { message: 'Prix unitaire invalide sur un article' });
+    let product = null;
+    if (it.product_id) {
+      product = db.prepare('SELECT * FROM products WHERE id = ? AND company_id = ? AND deleted = 0').get(it.product_id, company.id);
+      if (!product) return json(res, 404, { message: 'Produit introuvable dans le catalogue' });
+      if (product.stock < Number(it.qty)) {
+        return json(res, 400, { message: `Stock insuffisant pour "${product.name}" (reste ${product.stock})` });
+      }
+    }
+    resolvedItems.push({ ...it, product });
   }
 
   let clientNameSnapshot = (body.client_name || '').trim();
@@ -90,10 +104,14 @@ async function handleCreateInvoice(req, res, { json, user, body }) {
         body.date || new Date().toISOString().slice(0, 10), body.due_date || null, body.subject || null,
         discountPct, tvaRate, now, now);
 
-    items.forEach((it, i) => {
-      db.prepare(`INSERT INTO invoice_items (id, invoice_id, description, qty, unit_price, sort_order)
-                  VALUES (?, ?, ?, ?, ?, ?)`)
-        .run(crypto.randomUUID(), id, it.description.trim(), Number(it.qty), Number(it.unit_price) || 0, i);
+    resolvedItems.forEach((it, i) => {
+      db.prepare(`INSERT INTO invoice_items (id, invoice_id, description, qty, unit_price, sort_order, product_id)
+                  VALUES (?, ?, ?, ?, ?, ?, ?)`)
+        .run(crypto.randomUUID(), id, it.description.trim(), Number(it.qty), Number(it.unit_price) || 0, i, it.product ? it.product.id : null);
+      if (it.product) {
+        db.prepare('UPDATE products SET stock = stock - ?, updated_at = ? WHERE id = ?')
+          .run(Number(it.qty), now, it.product.id);
+      }
     });
   });
 
@@ -115,7 +133,15 @@ async function handleRecordPayment(req, res, { json, user, body, params }) {
 
   const items = db.prepare('SELECT * FROM invoice_items WHERE invoice_id = ?').all(invoice.id);
   const { total } = computeTotals(items, invoice.discount_pct, invoice.tva_rate);
-  const amountPaid = Math.min(total, invoice.amount_paid + amount);
+  const remaining = total - invoice.amount_paid;
+  // Refuser plutôt que de plafonner silencieusement : un encaissement
+  // supérieur au solde dû est presque toujours une erreur de saisie, et
+  // l'accepter en silence créerait un écart invisible entre l'argent
+  // réellement remis et ce qui est enregistré.
+  if (amount > remaining + 0.01) {
+    return json(res, 400, { message: `Le montant dépasse le solde restant (${Math.round(remaining)} F)` });
+  }
+  const amountPaid = invoice.amount_paid + amount;
   const status = amountPaid >= total ? 'paye' : 'partiel';
 
   db.prepare(`UPDATE invoices SET amount_paid=?, status=?, payment_method=?, payment_ref=?, payment_date=?, updated_at=? WHERE id=?`)
@@ -150,7 +176,16 @@ async function handleDeleteInvoice(req, res, { json, user, params }) {
   const company = getOrCreateCompany(user.id);
   const invoice = ownedInvoice(company.id, params.id);
   if (!invoice) return json(res, 404, { message: 'Facture introuvable' });
-  db.prepare('UPDATE invoices SET deleted=1, deleted_at=? WHERE id=?').run(Date.now(), invoice.id);
+  withTransaction(() => {
+    // On restitue le stock des lignes liées à un produit du catalogue :
+    // une facture supprimée ne doit pas laisser le stock décrémenté pour rien.
+    const linkedItems = db.prepare('SELECT product_id, qty FROM invoice_items WHERE invoice_id = ? AND product_id IS NOT NULL').all(invoice.id);
+    const now = Date.now();
+    for (const it of linkedItems) {
+      db.prepare('UPDATE products SET stock = stock + ?, updated_at = ? WHERE id = ?').run(it.qty, now, it.product_id);
+    }
+    db.prepare('UPDATE invoices SET deleted=1, deleted_at=? WHERE id=?').run(now, invoice.id);
+  });
   json(res, 200, { ok: true });
 }
 

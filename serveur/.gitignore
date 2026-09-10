@@ -1,0 +1,21 @@
+# Dépendances
+node_modules/
+
+# Base SQLite locale (données réelles — ne doit jamais être committée)
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Secrets
+.env
+.env.local
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS / IDE
+.DS_Store
+.vscode/
+.idea/
