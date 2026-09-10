@@ -3,6 +3,8 @@
 // sur le même principe que public-page.js mais bien plus simple : pas de
 // paiement, juste une confirmation.
 
+const { safeJsonForScript } = require('./html-utils');
+
 function renderDeliveryPage(token) {
   return `<!DOCTYPE html>
 <html lang="fr">
@@ -64,7 +66,7 @@ function renderDeliveryPage(token) {
 </div>
 
 <script>
-const TOKEN = ${JSON.stringify(token)};
+const TOKEN = ${safeJsonForScript(token)};
 
 async function load(){
   try{

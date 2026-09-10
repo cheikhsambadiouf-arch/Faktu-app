@@ -2,6 +2,8 @@
 // client choisit un produit du catalogue du vendeur et passe commande
 // directement, sans jamais avoir eu besoin de son numero de telephone.
 
+const { safeJsonForScript } = require('./html-utils');
+
 function renderStorePage(slug) {
   return `<!DOCTYPE html>
 <html lang="fr">
@@ -97,7 +99,7 @@ function renderStorePage(slug) {
 </div>
 
 <script>
-const SLUG = ${JSON.stringify(slug)};
+const SLUG = ${safeJsonForScript(slug)};
 let store = null;
 let chosenProduct = null;
 let qty = 1;

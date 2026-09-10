@@ -2,6 +2,8 @@
 // WhatsApp, sans jamais avoir besoin d'un compte FAKTU. Se suffit à
 // elle-même : appelle l'API publique en JS, aucune dépendance externe.
 
+const { safeJsonForScript } = require('./html-utils');
+
 function renderPublicOrderPage(token) {
   return `<!DOCTYPE html>
 <html lang="fr">
@@ -110,7 +112,7 @@ function renderPublicOrderPage(token) {
 </div>
 
 <script>
-const TOKEN = ${JSON.stringify(token)};
+const TOKEN = ${safeJsonForScript(token)};
 const API = '';
 let orderData = null;
 

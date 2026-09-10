@@ -28,6 +28,10 @@ async function handleGetCompany(req, res, { json, user }) {
   json(res, 200, { company });
 }
 
+function isValidEmail(email) {
+  return typeof email === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
+}
+
 async function handleUpdateCompany(req, res, { json, user, body }) {
   const company = getOrCreateCompany(user.id);
 
@@ -43,6 +47,9 @@ async function handleUpdateCompany(req, res, { json, user, body }) {
 
   if (body.tva_rate != null && (isNaN(body.tva_rate) || body.tva_rate < 0 || body.tva_rate > 100)) {
     return json(res, 400, { message: 'Taux de TVA invalide' });
+  }
+  if (body.email != null && body.email !== '' && !isValidEmail(body.email)) {
+    return json(res, 400, { message: 'Email invalide' });
   }
 
   values.push(company.id);
