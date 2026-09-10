@@ -6,6 +6,7 @@
 const crypto = require('crypto');
 const db = require('./db');
 const paydunya = require('./paydunya');
+const { nextNumber } = require('./numbering');
 
 function computeTotals(items, discountPct, tvaRate) {
   const subtotal = items.reduce((s, it) => s + (Number(it.qty) || 0) * (Number(it.unit_price) || 0), 0);
@@ -242,8 +243,56 @@ async function handlePaydunyaIPN(req, res, { json, body }) {
   json(res, 200, { ok: true });
 }
 
-// ---- Confirmation de livraison à deux — livreur ET client doivent
-// confirmer chacun de leur côté avant que la commande passe à "livrée". ----
+// ===== Boutique live : lien permanent (ex. /l/amine) où le client choisit
+// lui-même un produit du catalogue et passe commande, sans que le vendeur
+// n'ait à donner son numéro en direct. Réutilise ensuite tout le système de
+// suivi/paiement/livraison déjà en place via le jeton public habituel. =====
+
+async function handlePublicGetStore(req, res, { json, params }) {
+  const company = db.prepare('SELECT id, name, logo, live_active FROM companies WHERE store_slug = ?').get(params.slug);
+  if (!company) return json(res, 404, { message: 'Boutique introuvable' });
+  const products = db.prepare('SELECT id, name, price, unit FROM products WHERE company_id = ? AND deleted = 0 ORDER BY name').all(company.id);
+  json(res, 200, {
+    company_name: company.name, company_logo: company.logo,
+    live_active: !!company.live_active, products
+  });
+}
+
+async function handlePublicCreateStoreOrder(req, res, { json, params, body }) {
+  const company = db.prepare('SELECT * FROM companies WHERE store_slug = ?').get(params.slug);
+  if (!company) return json(res, 404, { message: 'Boutique introuvable' });
+
+  const product = db.prepare('SELECT * FROM products WHERE id = ? AND company_id = ? AND deleted = 0').get(body.product_id, company.id);
+  if (!product) return json(res, 404, { message: 'Produit introuvable' });
+
+  const qty = Math.max(1, Number(body.qty) || 1);
+  const clientName = (body.client_name || '').trim();
+  const clientPhone = (body.client_phone || '').trim();
+  const clientAddress = (body.client_address || '').trim();
+  if (!clientName) return json(res, 400, { message: 'Le nom est requis' });
+  if (!clientPhone) return json(res, 400, { message: 'Le téléphone est requis' });
+
+  const id = crypto.randomUUID();
+  const now = Date.now();
+  const number = nextNumber(company.id, 'VTE');
+  const deliveryStatus = clientAddress ? 'à faire' : 'retrait';
+  // Le total n'est JAMAIS pris tel quel depuis le client : recalculé ici à
+  // partir du prix réel du produit dans notre base.
+  const publicToken = crypto.randomBytes(24).toString('base64url');
+
+  db.prepare(`INSERT INTO sales
+    (id, company_id, number, date, client_name, client_phone, client_address, tva_rate,
+     payment_status, amount_paid, delivery_status, public_token, client_validated, client_validated_at,
+     deleted, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'impayé', 0, ?, ?, 1, ?, 0, ?, ?)`)
+    .run(id, company.id, number, new Date().toISOString().slice(0, 10),
+      clientName, clientPhone, clientAddress || null, deliveryStatus, publicToken, now, now, now);
+
+  db.prepare('INSERT INTO sale_items (id, sale_id, description, qty, unit_price) VALUES (?, ?, ?, ?, ?)')
+    .run(crypto.randomUUID(), id, product.name, qty, product.price);
+
+  json(res, 201, { token: publicToken });
+}
 
 // Une fois les deux confirmations réunies, on marque enfin livrée — jamais
 // avant, même si l'une des deux parties a confirmé en premier.
@@ -299,5 +348,6 @@ async function handlePublicClientConfirmDelivery(req, res, { json, params }) {
 module.exports = {
   ensureToken, findByToken, ensureDriverToken, findByDriverToken, handlePublicGetOrder, handlePublicValidate,
   handlePublicReportPayment, handlePublicPaydunyaCheckout, handlePaydunyaIPN, handlePublicCheckPayment,
-  handlePublicGetDelivery, handleDriverConfirmDelivery, handlePublicClientConfirmDelivery
+  handlePublicGetDelivery, handleDriverConfirmDelivery, handlePublicClientConfirmDelivery,
+  handlePublicGetStore, handlePublicCreateStoreOrder
 };
