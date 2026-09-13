@@ -86,6 +86,9 @@ CREATE TABLE IF NOT EXISTS products (
   stock INTEGER NOT NULL DEFAULT 0,
   alert_threshold INTEGER NOT NULL DEFAULT 0,
   unit TEXT,
+  image TEXT,
+  color TEXT,
+  size TEXT,
   deleted INTEGER NOT NULL DEFAULT 0,
   deleted_at INTEGER,
   created_at INTEGER NOT NULL,
@@ -234,6 +237,15 @@ const salesMigrations = [
   "ALTER TABLE sales ADD COLUMN preferred_delivery_date TEXT"
 ];
 for (const stmt of salesMigrations) {
+  try { db.exec(stmt); } catch (e) { /* colonne déjà existante — rien à faire */ }
+}
+
+const productMigrations = [
+  "ALTER TABLE products ADD COLUMN image TEXT",
+  "ALTER TABLE products ADD COLUMN color TEXT",
+  "ALTER TABLE products ADD COLUMN size TEXT"
+];
+for (const stmt of productMigrations) {
   try { db.exec(stmt); } catch (e) { /* colonne déjà existante — rien à faire */ }
 }
 
