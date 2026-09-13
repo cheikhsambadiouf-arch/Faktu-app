@@ -60,6 +60,7 @@ function renderAdminPage() {
         <button class="btn-outline btn-sm" onclick="loadUsers()">Actualiser</button>
       </div>
     </div>
+    <div class="muted" id="table-error" style="margin-bottom:8px;color:var(--danger);"></div>
     <div class="card" style="overflow-x:auto;">
       <table>
         <thead>
@@ -103,12 +104,18 @@ async function adminFetch(path, opts){
 }
 
 async function loadUsers(){
+  const errEl = document.getElementById('table-error');
+  errEl.textContent = '';
   try{
     const res = await adminFetch('/api/admin/users');
     const data = await res.json();
-    ALL_USERS = data.users;
+    if(!res.ok) throw new Error(data.message || ('Erreur ' + res.status));
+    ALL_USERS = data.users || [];
     renderTable();
-  }catch(e){ /* deja gere par adminFetch en cas de 401 */ }
+    if(ALL_USERS.length === 0) errEl.textContent = 'Aucun utilisateur trouvé.';
+  }catch(e){
+    errEl.textContent = 'Erreur de chargement : ' + e.message;
+  }
 }
 
 function fmtDate(ts){ return new Date(ts).toLocaleDateString('fr-FR'); }
