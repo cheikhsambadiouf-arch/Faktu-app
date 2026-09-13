@@ -55,7 +55,7 @@ async function handlePublicGetOrder(req, res, { json, params }) {
   if (!found) return json(res, 404, { message: 'Commande introuvable ou lien expiré' });
   const { kind, record } = found;
 
-  const company = db.prepare('SELECT name, logo, wave_payment_link, om_merchant_number FROM companies WHERE id = ?').get(record.company_id);
+  const company = db.prepare('SELECT name, logo, phone, wave_payment_link, om_merchant_number FROM companies WHERE id = ?').get(record.company_id);
   const paydunyaAvailable = paydunya.isConfigured();
 
   if (kind === 'sale') {
@@ -69,7 +69,10 @@ async function handlePublicGetOrder(req, res, { json, params }) {
       payment_status: record.payment_status, payment_reported: !!record.payment_reported,
       paydunya_available: paydunyaAvailable,
       delivery_status: record.delivery_status, client_confirmed_delivery: !!record.client_confirmed_delivery_at,
-      company: { name: company.name, logo: company.logo, wave_payment_link: company.wave_payment_link, om_merchant_number: company.om_merchant_number }
+      request_status: record.request_status || null, request_refuse_reason: record.request_refuse_reason || null,
+      preferred_delivery_date: record.preferred_delivery_date || null,
+      client_photo: record.client_photo || null, created_at: record.created_at,
+      company: { name: company.name, logo: company.logo, phone: company.phone, wave_payment_link: company.wave_payment_link, om_merchant_number: company.om_merchant_number }
     });
   }
 
@@ -243,22 +246,78 @@ async function handlePaydunyaIPN(req, res, { json, body }) {
   json(res, 200, { ok: true });
 }
 
-// ===== Boutique live : lien permanent (ex. /l/amine) où le client choisit
-// lui-même un produit du catalogue et passe commande, sans que le vendeur
-// n'ait à donner son numéro en direct. Réutilise ensuite tout le système de
-// suivi/paiement/livraison déjà en place via le jeton public habituel. =====
+// ===== Boutique live : lien permanent (ex. /l/amine) où le client décrit
+// lui-même ce qu'il veut commander (annoncé pendant le live) — pas de
+// catalogue à préparer à l'avance. La demande part en attente de validation
+// du vendeur ; le paiement n'est proposé qu'une fois acceptée, pour ne
+// jamais avoir à faire annuler un transfert si le vendeur refuse. =====
 
 async function handlePublicGetStore(req, res, { json, params }) {
-  const company = db.prepare('SELECT id, name, logo, live_active FROM companies WHERE store_slug = ?').get(params.slug);
+  const company = db.prepare('SELECT id, name, logo, phone, live_active FROM companies WHERE store_slug = ?').get(params.slug);
   if (!company) return json(res, 404, { message: 'Boutique introuvable' });
-  const products = db.prepare('SELECT id, name, price, unit FROM products WHERE company_id = ? AND deleted = 0 ORDER BY name').all(company.id);
   json(res, 200, {
-    company_name: company.name, company_logo: company.logo,
-    live_active: !!company.live_active, products
+    company_name: company.name, company_logo: company.logo, company_phone: company.phone,
+    live_active: !!company.live_active
   });
 }
 
 async function handlePublicCreateStoreOrder(req, res, { json, params, body }) {
+  const company = db.prepare('SELECT * FROM companies WHERE store_slug = ?').get(params.slug);
+  if (!company) return json(res, 404, { message: 'Boutique introuvable' });
+
+  const description = (body.description || '').trim().slice(0, 200);
+  const qty = Math.max(1, Number(body.qty) || 1);
+  const unitPrice = Math.max(0, Number(body.unit_price) || 0);
+  const clientName = (body.client_name || '').trim();
+  const clientPhone = (body.client_phone || '').trim();
+  const clientAddress = (body.client_address || '').trim();
+  const clientPhoto = typeof body.client_photo === 'string' && body.client_photo.startsWith('data:image/') ? body.client_photo : null;
+  const preferredDate = (body.preferred_delivery_date || '').trim().slice(0, 20) || null;
+  if (!description) return json(res, 400, { message: 'Décrivez le produit souhaité' });
+  if (!unitPrice) return json(res, 400, { message: 'Indiquez le prix annoncé pendant le live' });
+  if (!clientName) return json(res, 400, { message: 'Le nom est requis' });
+  if (!clientPhone) return json(res, 400, { message: 'Le téléphone est requis' });
+
+  const id = crypto.randomUUID();
+  const now = Date.now();
+  const number = nextNumber(company.id, 'VTE');
+  const deliveryStatus = clientAddress ? 'à faire' : 'retrait';
+  const publicToken = crypto.randomBytes(24).toString('base64url');
+
+  // Le prix est déclaré par le client (annoncé à l'oral pendant le live, pas
+  // dans un catalogue vérifiable) — c'est justement pour cette raison que la
+  // commande part "en attente" : le vendeur doit confirmer ce prix avant
+  // que quoi que ce soit ne parte en livraison ou en paiement.
+  db.prepare(`INSERT INTO sales
+    (id, company_id, number, date, client_name, client_phone, client_address, tva_rate,
+     payment_status, amount_paid, delivery_status, public_token, client_validated, client_validated_at,
+     request_status, client_photo, preferred_delivery_date, deleted, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'impayé', 0, ?, ?, 1, ?, 'pending', ?, ?, 0, ?, ?)`)
+    .run(id, company.id, number, new Date().toISOString().slice(0, 10),
+      clientName, clientPhone, clientAddress || null, deliveryStatus, publicToken, now, clientPhoto, preferredDate, now, now);
+
+  db.prepare('INSERT INTO sale_items (id, sale_id, description, qty, unit_price) VALUES (?, ?, ?, ?, ?)')
+    .run(crypto.randomUUID(), id, description, qty, unitPrice);
+
+  json(res, 201, { token: publicToken });
+}
+
+// ===== Lien "Partager catalogue" : le client choisit dans le vrai
+// catalogue du vendeur, à prix fixes et garantis. Comme le prix ne vient
+// jamais du client, aucune validation manuelle n'est nécessaire — la
+// commande est directement acceptée et le client peut payer tout de suite. =====
+
+async function handlePublicGetCatalog(req, res, { json, params }) {
+  const company = db.prepare('SELECT id, name, logo, phone, live_active FROM companies WHERE store_slug = ?').get(params.slug);
+  if (!company) return json(res, 404, { message: 'Boutique introuvable' });
+  const products = db.prepare('SELECT id, name, price, unit FROM products WHERE company_id = ? AND deleted = 0 ORDER BY name').all(company.id);
+  json(res, 200, {
+    company_name: company.name, company_logo: company.logo, company_phone: company.phone,
+    live_active: !!company.live_active, products
+  });
+}
+
+async function handlePublicCreateCatalogOrder(req, res, { json, params, body }) {
   const company = db.prepare('SELECT * FROM companies WHERE store_slug = ?').get(params.slug);
   if (!company) return json(res, 404, { message: 'Boutique introuvable' });
 
@@ -269,6 +328,7 @@ async function handlePublicCreateStoreOrder(req, res, { json, params, body }) {
   const clientName = (body.client_name || '').trim();
   const clientPhone = (body.client_phone || '').trim();
   const clientAddress = (body.client_address || '').trim();
+  const preferredDate = (body.preferred_delivery_date || '').trim().slice(0, 20) || null;
   if (!clientName) return json(res, 400, { message: 'Le nom est requis' });
   if (!clientPhone) return json(res, 400, { message: 'Le téléphone est requis' });
 
@@ -276,17 +336,19 @@ async function handlePublicCreateStoreOrder(req, res, { json, params, body }) {
   const now = Date.now();
   const number = nextNumber(company.id, 'VTE');
   const deliveryStatus = clientAddress ? 'à faire' : 'retrait';
-  // Le total n'est JAMAIS pris tel quel depuis le client : recalculé ici à
-  // partir du prix réel du produit dans notre base.
   const publicToken = crypto.randomBytes(24).toString('base64url');
 
+  // Le total est TOUJOURS recalculé ici à partir du vrai prix du produit en
+  // base — jamais pris tel quel depuis le client. Et comme ce prix est déjà
+  // garanti par le vendeur, request_status part directement à 'accepted' :
+  // pas d'étape d'attente, le client peut payer immédiatement.
   db.prepare(`INSERT INTO sales
     (id, company_id, number, date, client_name, client_phone, client_address, tva_rate,
      payment_status, amount_paid, delivery_status, public_token, client_validated, client_validated_at,
-     deleted, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'impayé', 0, ?, ?, 1, ?, 0, ?, ?)`)
+     request_status, preferred_delivery_date, deleted, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'impayé', 0, ?, ?, 1, ?, 'accepted', ?, 0, ?, ?)`)
     .run(id, company.id, number, new Date().toISOString().slice(0, 10),
-      clientName, clientPhone, clientAddress || null, deliveryStatus, publicToken, now, now, now);
+      clientName, clientPhone, clientAddress || null, deliveryStatus, publicToken, now, preferredDate, now, now);
 
   db.prepare('INSERT INTO sale_items (id, sale_id, description, qty, unit_price) VALUES (?, ?, ?, ?, ?)')
     .run(crypto.randomUUID(), id, product.name, qty, product.price);
@@ -349,5 +411,6 @@ module.exports = {
   ensureToken, findByToken, ensureDriverToken, findByDriverToken, handlePublicGetOrder, handlePublicValidate,
   handlePublicReportPayment, handlePublicPaydunyaCheckout, handlePaydunyaIPN, handlePublicCheckPayment,
   handlePublicGetDelivery, handleDriverConfirmDelivery, handlePublicClientConfirmDelivery,
-  handlePublicGetStore, handlePublicCreateStoreOrder
+  handlePublicGetStore, handlePublicCreateStoreOrder,
+  handlePublicGetCatalog, handlePublicCreateCatalogOrder
 };
