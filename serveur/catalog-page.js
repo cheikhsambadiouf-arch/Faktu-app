@@ -30,10 +30,13 @@ function renderCatalogPage(slug) {
   @keyframes pulse{0%,100%{opacity:1;}50%{opacity:.35;}}
   .product-btn{
     width:100%;text-align:left;background:#fff;border:1.5px solid var(--border);border-radius:13px;
-    padding:13px 14px;margin-bottom:9px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;
+    padding:10px 14px;margin-bottom:9px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:10px;
     font-family:inherit;font-size:14.5px;color:var(--ink);
   }
+  .product-thumb{width:48px;height:48px;border-radius:10px;object-fit:cover;flex-shrink:0;background:var(--bg);}
+  .product-info{flex:1;min-width:0;}
   .product-btn .name{font-weight:700;}
+  .product-btn .variant{color:var(--ink-soft);font-size:12px;margin-top:1px;}
   .product-btn .price{font-weight:800;color:var(--accent);white-space:nowrap;margin-left:10px;}
   .qty-row{display:flex;align-items:center;justify-content:center;gap:16px;margin:14px 0;}
   .qty-btn{width:40px;height:40px;border-radius:50%;border:1.5px solid var(--border);background:#fff;font-size:20px;font-weight:700;color:var(--primary);}
@@ -134,18 +137,24 @@ function renderProducts(){
     document.getElementById('no-products').style.display='block';
     return;
   }
-  el.innerHTML = store.products.map((p,i) =>
-    '<button class="product-btn" type="button" onclick="chooseProduct(' + i + ')">' +
-      '<span class="name">' + escapeHtml(p.name) + '</span>' +
+  el.innerHTML = store.products.map((p,i) => {
+    const variant = [p.color, p.size].filter(Boolean).join(' · ');
+    return '<button class="product-btn" type="button" onclick="chooseProduct(' + i + ')">' +
+      (p.image ? '<img class="product-thumb" src="' + p.image + '">' : '') +
+      '<div class="product-info">' +
+        '<span class="name">' + escapeHtml(p.name) + '</span>' +
+        (variant ? '<div class="variant">' + escapeHtml(variant) + '</div>' : '') +
+      '</div>' +
       '<span class="price">' + fmt(p.price) + ' F</span>' +
-    '</button>'
-  ).join('');
+    '</button>';
+  }).join('');
 }
 
 function chooseProduct(i){
   chosenProduct = store.products[i];
   qty = 1;
-  document.getElementById('chosen-product-name').textContent = chosenProduct.name;
+  const variant = [chosenProduct.color, chosenProduct.size].filter(Boolean).join(' · ');
+  document.getElementById('chosen-product-name').textContent = chosenProduct.name + (variant ? ' (' + variant + ')' : '');
   updateOrderSummary();
   document.getElementById('product-list-view').style.display='none';
   document.getElementById('order-form-view').style.display='block';
