@@ -20,11 +20,12 @@ async function handleCreateProduct(req, res, { json, user, body }) {
 
   const id = crypto.randomUUID();
   const now = Date.now();
-  db.prepare(`INSERT INTO products (id, company_id, name, reference, category, price, cost_price, stock, alert_threshold, unit, deleted, created_at, updated_at)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`)
+  db.prepare(`INSERT INTO products (id, company_id, name, reference, category, price, cost_price, stock, alert_threshold, unit, image, color, size, deleted, created_at, updated_at)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`)
     .run(id, company.id, name, body.reference || null, body.category || null, price,
       body.cost_price != null ? Number(body.cost_price) : null,
-      Number(body.stock) || 0, Number(body.alert_threshold) || 0, body.unit || null, now, now);
+      Number(body.stock) || 0, Number(body.alert_threshold) || 0, body.unit || null,
+      body.image || null, body.color || null, body.size || null, now, now);
 
   json(res, 201, { product: db.prepare('SELECT * FROM products WHERE id = ?').get(id) });
 }
@@ -41,7 +42,7 @@ async function handleUpdateProduct(req, res, { json, user, body, params }) {
   const name = body.name != null ? body.name.trim() : existing.name;
   if (!name) return json(res, 400, { message: 'Le nom du produit est requis' });
 
-  db.prepare(`UPDATE products SET name=?, reference=?, category=?, price=?, cost_price=?, stock=?, alert_threshold=?, unit=?, updated_at=? WHERE id=?`)
+  db.prepare(`UPDATE products SET name=?, reference=?, category=?, price=?, cost_price=?, stock=?, alert_threshold=?, unit=?, image=?, color=?, size=?, updated_at=? WHERE id=?`)
     .run(name,
       body.reference != null ? body.reference : existing.reference,
       body.category != null ? body.category : existing.category,
@@ -50,6 +51,9 @@ async function handleUpdateProduct(req, res, { json, user, body, params }) {
       body.stock != null ? Number(body.stock) : existing.stock,
       body.alert_threshold != null ? Number(body.alert_threshold) : existing.alert_threshold,
       body.unit != null ? body.unit : existing.unit,
+      body.image != null ? body.image : existing.image,
+      body.color != null ? body.color : existing.color,
+      body.size != null ? body.size : existing.size,
       Date.now(), existing.id);
 
   json(res, 200, { product: db.prepare('SELECT * FROM products WHERE id = ?').get(existing.id) });
