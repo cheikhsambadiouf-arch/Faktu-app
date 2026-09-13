@@ -31,6 +31,10 @@ function renderPublicOrderPage(token) {
   .badge{display:inline-block;padding:4px 12px;border-radius:999px;font-size:12px;font-weight:700;margin-bottom:10px;}
   .badge.ok{background:#E1F0E5;color:var(--success);}
   .badge.wait{background:#FDEBD6;color:#B8600A;}
+  .badge.no{background:#F7E2E0;color:#B3413A;}
+  .spinner{width:32px;height:32px;border:3px solid var(--border);border-top-color:var(--primary);border-radius:50%;margin:0 auto 10px;animation:spin 0.8s linear infinite;}
+  @keyframes spin{to{transform:rotate(360deg);}}
+  .req-photo{max-width:100%;border-radius:10px;margin-top:10px;}
   .logo{max-height:44px;margin-bottom:10px;}
   label{display:block;font-size:12px;font-weight:700;color:var(--ink-soft);margin:10px 0 5px;text-transform:uppercase;letter-spacing:.02em;}
   input[type=text],textarea{
@@ -54,7 +58,27 @@ function renderPublicOrderPage(token) {
       <img id="co-logo" class="logo" style="display:none;">
       <div id="co-name" style="font-weight:700;font-size:15px;"></div>
     </div>
-    <div class="card">
+
+    <div id="request-pending-section" class="card" style="display:none;text-align:center;">
+      <div class="spinner"></div>
+      <span class="badge wait">EN ATTENTE</span>
+      <div style="font-weight:700;margin:4px 0 4px;">Votre demande a été envoyée</div>
+      <div class="muted">Le vendeur doit la confirmer avant l'étape de paiement.</div>
+      <div id="pending-item-summary" style="margin-top:14px;text-align:left;"></div>
+      <img id="pending-photo" class="req-photo" style="display:none;">
+      <div id="fallback-contact" style="display:none;margin-top:16px;padding-top:14px;border-top:1px solid var(--border);">
+        <div class="muted" style="margin-bottom:8px;">Ça prend un peu de temps ? D'autres personnes sont aussi intéressées pendant le live.</div>
+        <a id="fallback-call-link" style="text-decoration:none;"><button class="btn-accent" type="button">📞 Contacter le vendeur directement</button></a>
+      </div>
+    </div>
+
+    <div id="request-refused-section" class="card" style="display:none;text-align:center;">
+      <span class="badge no">NON RETENUE</span>
+      <div style="font-weight:700;margin:4px 0 6px;">Le vendeur n'a pas pu confirmer cette commande</div>
+      <div class="muted" id="refuse-reason-text"></div>
+    </div>
+
+    <div class="card" id="items-card">
       <div class="muted" id="order-number"></div>
       <div id="items"></div>
       <div class="row grand"><span>Total</span><span id="total"></span></div>
@@ -113,6 +137,8 @@ function renderPublicOrderPage(token) {
 const TOKEN = ${JSON.stringify(token)};
 const API = '';
 let orderData = null;
+let pendingPollTimer = null;
+let fallbackTimer = null;
 
 function fmt(n){ return Math.round(n||0).toLocaleString('fr-FR'); }
 
@@ -127,6 +153,25 @@ async function load(){
     document.getElementById('loading').style.display='none';
     document.getElementById('error').style.display='block';
   }
+}
+
+// Tant que la demande est en attente, on revérifie régulièrement si le
+// vendeur a répondu — le client reste simplement sur cette page pendant le
+// live, pas besoin qu'il revienne manuellement.
+function startPendingPoll(){
+  if(pendingPollTimer) return;
+  pendingPollTimer = setInterval(async ()=>{
+    try{
+      const res = await fetch(\`\${API}/api/public/orders/\${TOKEN}\`);
+      const data = await res.json();
+      if(data.request_status !== 'pending'){
+        clearInterval(pendingPollTimer); pendingPollTimer = null;
+        if(fallbackTimer){ clearTimeout(fallbackTimer); fallbackTimer = null; }
+      }
+      orderData = data;
+      render();
+    }catch(e){ /* on réessaiera au prochain intervalle */ }
+  }, 4000);
 }
 
 async function checkPaymentStatus(){
@@ -151,6 +196,46 @@ function render(){
     document.getElementById('co-logo').style.display='inline-block';
   }
   document.getElementById('co-name').textContent = d.company.name || '';
+
+  // Demande issue d'un live, pas encore tranchée par le vendeur — on
+  // n'affiche ni le détail de commande classique, ni le paiement, tant que
+  // ce n'est pas confirmé.
+  if(d.request_status === 'pending'){
+    document.getElementById('items-card').style.display='none';
+    document.getElementById('request-pending-section').style.display='block';
+    const it = d.items && d.items[0];
+    if(it){
+      document.getElementById('pending-item-summary').innerHTML =
+        \`<div class="item"><div><div class="name">\${escapeHtml(it.description)}</div><div class="sub">\${it.qty} × \${fmt(it.unit_price)} F</div></div><div>\${fmt(it.qty*it.unit_price)} F</div></div>\`;
+    }
+    if(d.client_photo){
+      document.getElementById('pending-photo').src = d.client_photo;
+      document.getElementById('pending-photo').style.display='block';
+    }
+    if(d.preferred_delivery_date){
+      document.getElementById('pending-item-summary').innerHTML +=
+        \`<div class="muted" style="margin-top:8px;">📅 Livraison souhaitée : \${new Date(d.preferred_delivery_date).toLocaleDateString('fr-FR')}</div>\`;
+    }
+    startPendingPoll();
+    if(!fallbackTimer && d.company.phone){
+      fallbackTimer = setTimeout(()=>{
+        const link = document.getElementById('fallback-call-link');
+        link.href = 'tel:' + d.company.phone.replace(/[^0-9+]/g,'');
+        document.getElementById('fallback-contact').style.display='block';
+      }, 60000);
+    }
+    return;
+  }
+  if(d.request_status === 'refused'){
+    document.getElementById('items-card').style.display='none';
+    document.getElementById('request-refused-section').style.display='block';
+    document.getElementById('refuse-reason-text').textContent = d.request_refuse_reason || '';
+    return;
+  }
+
+  document.getElementById('items-card').style.display='';
+  document.getElementById('request-pending-section').style.display='none';
+  document.getElementById('request-refused-section').style.display='none';
   document.getElementById('order-number').textContent = d.number + ' — ' + new Date(d.date).toLocaleDateString('fr-FR');
   document.getElementById('items').innerHTML = d.items.map(it =>
     \`<div class="item"><div><div class="name">\${escapeHtml(it.description)}</div><div class="sub">\${it.qty} × \${fmt(it.unit_price)} F</div></div><div>\${fmt(it.qty*it.unit_price)} F</div></div>\`
