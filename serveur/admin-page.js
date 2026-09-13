@@ -115,8 +115,8 @@ function fmtDate(ts){ return new Date(ts).toLocaleDateString('fr-FR'); }
 
 function statusBadge(u){
   if(u.subscriptionStatus==='active') return '<span class="badge active">Abonne</span>';
-  if(u.subscriptionStatus==='trial') return `<span class="badge trial">Essai (${u.trialDaysLeft} j.)</span>`;
-  return `<span class="badge expired">Expire</span>`;
+  if(u.subscriptionStatus==='trial') return '<span class="badge trial">Essai (' + u.trialDaysLeft + ' j.)</span>';
+  return '<span class="badge expired">Expire</span>';
 }
 
 function renderTable(){
@@ -124,20 +124,19 @@ function renderTable(){
   const filtered = q ? ALL_USERS.filter(u =>
     (u.name||'').toLowerCase().includes(q) || (u.phone||'').includes(q) || (u.companyName||'').toLowerCase().includes(q)
   ) : ALL_USERS;
-  document.getElementById('users-tbody').innerHTML = filtered.map(u => `
-    <tr>
-      <td><b>${escapeHtml(u.name)}</b><div class="muted">${escapeHtml(u.phone)}</div></td>
-      <td>${escapeHtml(u.companyName||'—')}</td>
-      <td>${fmtDate(u.createdAt)}</td>
-      <td>${statusBadge(u)}</td>
-      <td>${u.activityCount} document(s)</td>
-      <td>
-        <div class="actions">
-          <button class="btn-outline btn-sm" onclick="resetPassword('${u.id}')">Reinitialiser mdp</button>
-          <button class="btn-outline btn-sm" onclick="promptSubscription('${u.id}')">Abonnement</button>
-        </div>
-      </td>
-    </tr>`).join('');
+  document.getElementById('users-tbody').innerHTML = filtered.map(u =>
+    '<tr>' +
+      '<td><b>' + escapeHtml(u.name) + '</b><div class="muted">' + escapeHtml(u.phone) + '</div></td>' +
+      '<td>' + escapeHtml(u.companyName||'—') + '</td>' +
+      '<td>' + fmtDate(u.createdAt) + '</td>' +
+      '<td>' + statusBadge(u) + '</td>' +
+      '<td>' + u.activityCount + ' document(s)</td>' +
+      '<td><div class="actions">' +
+        '<button class="btn-outline btn-sm" onclick="resetPassword(&#39;' + u.id + '&#39;)">Reinitialiser mdp</button>' +
+        '<button class="btn-outline btn-sm" onclick="promptSubscription(&#39;' + u.id + '&#39;)">Abonnement</button>' +
+      '</div></td>' +
+    '</tr>'
+  ).join('');
 }
 
 function escapeHtml(s){ const d=document.createElement('div'); d.textContent=s||''; return d.innerHTML; }
@@ -146,7 +145,7 @@ async function resetPassword(userId){
   const pwd = prompt('Nouveau mot de passe pour cet utilisateur (au moins 6 caracteres) :');
   if(!pwd) return;
   try{
-    const res = await adminFetch(`/api/admin/users/${userId}/reset-password`, {
+    const res = await adminFetch('/api/admin/users/' + userId + '/reset-password', {
       method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({new_password: pwd})
     });
     const data = await res.json();
@@ -162,12 +161,12 @@ async function promptSubscription(userId){
   if(!['active','trial','expired'].includes(status)){ alert('Statut invalide.'); return; }
   let days = 30;
   if(status==='active'){
-    const d = prompt('Nombre de jours d\'abonnement :', '30');
+    const d = prompt('Nombre de jours d\\'abonnement :', '30');
     if(!d) return;
     days = Number(d) || 30;
   }
   try{
-    const res = await adminFetch(`/api/admin/users/${userId}/subscription`, {
+    const res = await adminFetch('/api/admin/users/' + userId + '/subscription', {
       method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({status, days})
     });
     const data = await res.json();
