@@ -22,6 +22,10 @@ CREATE TABLE IF NOT EXISTS users (
   email TEXT,
   password_hash TEXT NOT NULL,
   password_salt TEXT NOT NULL,
+  trial_start INTEGER NOT NULL,
+  subscription_status TEXT NOT NULL DEFAULT 'trial',
+  subscription_expires_at INTEGER,
+  subscription_plan TEXT,
   created_at INTEGER NOT NULL
 );
 
@@ -179,6 +183,9 @@ CREATE TABLE IF NOT EXISTS sales (
   client_validated_at INTEGER,
   payment_reported INTEGER NOT NULL DEFAULT 0,
   payment_reported_at INTEGER,
+  request_status TEXT,
+  request_refuse_reason TEXT,
+  client_photo TEXT,
   deleted INTEGER NOT NULL DEFAULT 0,
   deleted_at INTEGER,
   created_at INTEGER NOT NULL,
@@ -197,5 +204,24 @@ CREATE TABLE IF NOT EXISTS sale_items (
 );
 CREATE INDEX IF NOT EXISTS idx_sale_items_sale ON sale_items(sale_id);
 `);
+
+// Migration pour les bases déjà en production, créées avant l'ajout du
+// suivi d'essai/abonnement — CREATE TABLE IF NOT EXISTS ne modifie jamais
+// une table déjà existante, donc ces colonnes doivent être ajoutées à part.
+// Sans danger à ré-exécuter : SQLite refuse juste d'ajouter une colonne qui
+// existe déjà, ce qu'on ignore silencieusement.
+const userMigrations = [
+  "ALTER TABLE users ADD COLUMN trial_start INTEGER",
+  "ALTER TABLE users ADD COLUMN subscription_status TEXT NOT NULL DEFAULT 'trial'",
+  "ALTER TABLE users ADD COLUMN subscription_expires_at INTEGER",
+  "ALTER TABLE users ADD COLUMN subscription_plan TEXT"
+];
+for (const stmt of userMigrations) {
+  try { db.exec(stmt); } catch (e) { /* colonne déjà existante — rien à faire */ }
+}
+// Pour les comptes déjà créés avant cette migration, on démarre leur essai
+// à partir de maintenant plutôt que de les laisser avec trial_start vide
+// (ce qui les ferait apparaître comme "expiré" à tort).
+db.exec(`UPDATE users SET trial_start = ${Date.now()} WHERE trial_start IS NULL`);
 
 module.exports = db;
