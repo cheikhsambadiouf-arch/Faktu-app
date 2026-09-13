@@ -186,6 +186,7 @@ CREATE TABLE IF NOT EXISTS sales (
   request_status TEXT,
   request_refuse_reason TEXT,
   client_photo TEXT,
+  preferred_delivery_date TEXT,
   deleted INTEGER NOT NULL DEFAULT 0,
   deleted_at INTEGER,
   created_at INTEGER NOT NULL,
@@ -223,5 +224,17 @@ for (const stmt of userMigrations) {
 // à partir de maintenant plutôt que de les laisser avec trial_start vide
 // (ce qui les ferait apparaître comme "expiré" à tort).
 db.exec(`UPDATE users SET trial_start = ${Date.now()} WHERE trial_start IS NULL`);
+
+// Même principe pour les champs ajoutés à sales au fil des mises à jour —
+// utile dès que la base persiste réellement entre les déploiements.
+const salesMigrations = [
+  "ALTER TABLE sales ADD COLUMN request_status TEXT",
+  "ALTER TABLE sales ADD COLUMN request_refuse_reason TEXT",
+  "ALTER TABLE sales ADD COLUMN client_photo TEXT",
+  "ALTER TABLE sales ADD COLUMN preferred_delivery_date TEXT"
+];
+for (const stmt of salesMigrations) {
+  try { db.exec(stmt); } catch (e) { /* colonne déjà existante — rien à faire */ }
+}
 
 module.exports = db;
