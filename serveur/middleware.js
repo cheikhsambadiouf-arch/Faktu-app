@@ -13,4 +13,14 @@ function getAuthUser(req) {
   return user || null;
 }
 
-module.exports = { getAuthUser };
+// Complètement indépendant des comptes utilisateurs — un jeton admin est
+// signé avec { admin: true } plutôt qu'un uid, donc ne peut jamais être
+// confondu avec (ni obtenu via) un compte normal.
+function getAdminAuth(req) {
+  const header = req.headers['authorization'] || '';
+  const token = header.startsWith('Bearer ') ? header.slice(7) : null;
+  const payload = verifyToken(token);
+  return !!(payload && payload.admin === true);
+}
+
+module.exports = { getAuthUser, getAdminAuth };
