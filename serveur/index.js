@@ -6,7 +6,7 @@ const http = require('http');
 const crypto = require('crypto');
 const db = require('./db');
 const { hashPassword, verifyPassword, signToken } = require('./auth-utils');
-const { getAuthUser } = require('./middleware');
+const { getAuthUser, getAdminAuth } = require('./middleware');
 const { handleGetCompany, handleUpdateCompany, handleSetStoreSlug, handleToggleLive } = require('./companies');
 const { handleListClients, handleCreateClient, handleUpdateClient, handleDeleteClient } = require('./clients');
 const { handleListProducts, handleCreateProduct, handleUpdateProduct, handleDeleteProduct } = require('./products');
@@ -19,7 +19,8 @@ const {
 const {
   handleListSales, handleGetSale, handleCreateSale, handleRecordPayment: handleSalePayment,
   handleAssignDriver: handleSaleAssignDriver, handleMarkDelivered: handleSaleDelivered, handleDeleteSale,
-  handleGenerateLink: handleSaleGenerateLink, handleGenerateDriverLink: handleSaleGenerateDriverLink
+  handleGenerateLink: handleSaleGenerateLink, handleGenerateDriverLink: handleSaleGenerateDriverLink,
+  handleAcceptRequest: handleSaleAcceptRequest, handleRefuseRequest: handleSaleRefuseRequest
 } = require('./sales');
 const {
   handlePublicGetOrder, handlePublicValidate, handlePublicReportPayment,
@@ -30,6 +31,11 @@ const {
 const { renderPublicOrderPage } = require('./public-page');
 const { renderDeliveryPage } = require('./delivery-page');
 const { renderStorePage } = require('./store-page');
+const {
+  handleAdminLogin, handleAdminListUsers, handleAdminResetPassword,
+  handleAdminSetSubscription, handleMeSubscription, handleAdminExport
+} = require('./admin');
+const { renderAdminPage } = require('./admin-page');
 
 const PORT = process.env.PORT || 3000;
 const MAX_LOGIN_ATTEMPTS = 5;
@@ -105,8 +111,8 @@ async function handleRegister(req, res) {
   const id = crypto.randomUUID();
   const now = Date.now();
 
-  db.prepare(`INSERT INTO users (id, name, phone, email, password_hash, password_salt, created_at)
-              VALUES (?, ?, ?, ?, ?, ?, ?)`).run(id, name, phone, email || null, hash, salt, now);
+  db.prepare(`INSERT INTO users (id, name, phone, email, password_hash, password_salt, trial_start, created_at)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(id, name, phone, email || null, hash, salt, now, now);
 
   const token = signToken({ uid: id });
   json(res, 201, { token, user: { id, name, phone, email: email || null } });
@@ -169,6 +175,15 @@ const routes = [
   { method: 'PUT', path: '/api/company', auth: true, parseBody: true, handler: handleUpdateCompany },
   { method: 'POST', path: '/api/company/store-slug', auth: true, parseBody: true, handler: handleSetStoreSlug },
   { method: 'POST', path: '/api/company/live', auth: true, parseBody: true, handler: handleToggleLive },
+  { method: 'GET', path: '/api/me/subscription', auth: true, handler: handleMeSubscription },
+
+  // Administration — mot de passe séparé (ADMIN_PASSWORD), jamais lié à un
+  // compte utilisateur. handleAdminLogin lit son propre corps (style legacy).
+  { method: 'POST', path: '/api/admin/login', legacy: handleAdminLogin },
+  { method: 'GET', path: '/api/admin/users', admin: true, handler: handleAdminListUsers },
+  { method: 'POST', path: '/api/admin/users/:id/reset-password', admin: true, parseBody: true, handler: handleAdminResetPassword },
+  { method: 'POST', path: '/api/admin/users/:id/subscription', admin: true, parseBody: true, handler: handleAdminSetSubscription },
+  { method: 'GET', path: '/api/admin/export', admin: true, handler: handleAdminExport },
 
   { method: 'GET', path: '/api/clients', auth: true, handler: handleListClients },
   { method: 'POST', path: '/api/clients', auth: true, parseBody: true, handler: handleCreateClient },
@@ -203,6 +218,8 @@ const routes = [
   { method: 'DELETE', path: '/api/sales/:id', auth: true, handler: handleDeleteSale },
   { method: 'POST', path: '/api/sales/:id/link', auth: true, handler: handleSaleGenerateLink },
   { method: 'POST', path: '/api/sales/:id/driver-link', auth: true, handler: handleSaleGenerateDriverLink },
+  { method: 'POST', path: '/api/sales/:id/accept', auth: true, handler: handleSaleAcceptRequest },
+  { method: 'POST', path: '/api/sales/:id/refuse', auth: true, parseBody: true, handler: handleSaleRefuseRequest },
 
   // Routes publiques : aucune authentification, protégées uniquement par le
   // jeton non-devinable dans l'URL. Fonctionnent aussi bien pour une vente
@@ -261,6 +278,9 @@ const server = http.createServer((req, res) => {
     const slug = decodeURIComponent(url.pathname.slice('/l/'.length));
     return html(res, 200, renderStorePage(slug));
   }
+  if (req.method === 'GET' && url.pathname === '/admin') {
+    return html(res, 200, renderAdminPage());
+  }
 
   const found = matchRoute(req.method, url.pathname);
   if (!found) return json(res, 404, { message: 'Route inconnue' });
@@ -269,6 +289,9 @@ const server = http.createServer((req, res) => {
   const run = async () => {
     if (route.legacy) return route.legacy(req, res);
 
+    if (route.admin) {
+      if (!getAdminAuth(req)) return json(res, 401, { message: 'Accès administrateur requis' });
+    }
     let user = null;
     if (route.auth) {
       user = getAuthUser(req);
