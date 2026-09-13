@@ -310,7 +310,7 @@ async function handlePublicCreateStoreOrder(req, res, { json, params, body }) {
 async function handlePublicGetCatalog(req, res, { json, params }) {
   const company = db.prepare('SELECT id, name, logo, phone, live_active FROM companies WHERE store_slug = ?').get(params.slug);
   if (!company) return json(res, 404, { message: 'Boutique introuvable' });
-  const products = db.prepare('SELECT id, name, price, unit FROM products WHERE company_id = ? AND deleted = 0 ORDER BY name').all(company.id);
+  const products = db.prepare('SELECT id, name, price, unit, image, color, size FROM products WHERE company_id = ? AND deleted = 0 ORDER BY name').all(company.id);
   json(res, 200, {
     company_name: company.name, company_logo: company.logo, company_phone: company.phone,
     live_active: !!company.live_active, products
@@ -350,8 +350,10 @@ async function handlePublicCreateCatalogOrder(req, res, { json, params, body }) 
     .run(id, company.id, number, new Date().toISOString().slice(0, 10),
       clientName, clientPhone, clientAddress || null, deliveryStatus, publicToken, now, preferredDate, now, now);
 
+  const variant = [product.color, product.size].filter(Boolean).join(', ');
+  const itemDescription = variant ? `${product.name} (${variant})` : product.name;
   db.prepare('INSERT INTO sale_items (id, sale_id, description, qty, unit_price) VALUES (?, ?, ?, ?, ?)')
-    .run(crypto.randomUUID(), id, product.name, qty, product.price);
+    .run(crypto.randomUUID(), id, itemDescription, qty, product.price);
 
   json(res, 201, { token: publicToken });
 }
