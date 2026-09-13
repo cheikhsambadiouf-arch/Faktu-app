@@ -26,11 +26,13 @@ const {
   handlePublicGetOrder, handlePublicValidate, handlePublicReportPayment,
   handlePublicPaydunyaCheckout, handlePaydunyaIPN, handlePublicCheckPayment,
   handlePublicGetDelivery, handleDriverConfirmDelivery, handlePublicClientConfirmDelivery,
-  handlePublicGetStore, handlePublicCreateStoreOrder
+  handlePublicGetStore, handlePublicCreateStoreOrder,
+  handlePublicGetCatalog, handlePublicCreateCatalogOrder
 } = require('./public-orders');
 const { renderPublicOrderPage } = require('./public-page');
 const { renderDeliveryPage } = require('./delivery-page');
 const { renderStorePage } = require('./store-page');
+const { renderCatalogPage } = require('./catalog-page');
 const {
   handleAdminLogin, handleAdminListUsers, handleAdminResetPassword,
   handleAdminSetSubscription, handleMeSubscription, handleAdminExport
@@ -241,7 +243,12 @@ const routes = [
   // Boutique live : lien permanent où le client choisit un produit et
   // commande directement, sans jamais avoir le numéro du vendeur.
   { method: 'GET', path: '/api/public/store/:slug', handler: handlePublicGetStore },
-  { method: 'POST', path: '/api/public/store/:slug/order', parseBody: true, handler: handlePublicCreateStoreOrder }
+  { method: 'POST', path: '/api/public/store/:slug/order', parseBody: true, handler: handlePublicCreateStoreOrder },
+
+  // Lien "Partager catalogue" — prix fixes du vrai catalogue, aucune
+  // validation manuelle nécessaire.
+  { method: 'GET', path: '/api/public/catalog/:slug', handler: handlePublicGetCatalog },
+  { method: 'POST', path: '/api/public/catalog/:slug/order', parseBody: true, handler: handlePublicCreateCatalogOrder }
 ];
 
 function matchRoute(method, pathname) {
@@ -277,6 +284,10 @@ const server = http.createServer((req, res) => {
   if (req.method === 'GET' && url.pathname.startsWith('/l/')) {
     const slug = decodeURIComponent(url.pathname.slice('/l/'.length));
     return html(res, 200, renderStorePage(slug));
+  }
+  if (req.method === 'GET' && url.pathname.startsWith('/c/')) {
+    const slug = decodeURIComponent(url.pathname.slice('/c/'.length));
+    return html(res, 200, renderCatalogPage(slug));
   }
   if (req.method === 'GET' && url.pathname === '/admin') {
     return html(res, 200, renderAdminPage());
