@@ -38,6 +38,7 @@ const {
   handleAdminSetSubscription, handleMeSubscription, handleAdminExport
 } = require('./admin');
 const { renderAdminPage } = require('./admin-page');
+const { handleAssistantParse, handleAssistantExecute } = require('./assistant');
 
 const PORT = process.env.PORT || 3000;
 const MAX_LOGIN_ATTEMPTS = 5;
@@ -178,6 +179,11 @@ const routes = [
   { method: 'POST', path: '/api/company/store-slug', auth: true, parseBody: true, handler: handleSetStoreSlug },
   { method: 'POST', path: '/api/company/live', auth: true, parseBody: true, handler: handleToggleLive },
   { method: 'GET', path: '/api/me/subscription', auth: true, handler: handleMeSubscription },
+
+  // « Parler à FAKTU » — comprendre une phrase, puis exécuter une fois
+  // confirmée par le commerçant. L'IA ne touche jamais la base directement.
+  { method: 'POST', path: '/api/assistant/parse', auth: true, parseBody: true, handler: handleAssistantParse },
+  { method: 'POST', path: '/api/assistant/execute', auth: true, parseBody: true, handler: handleAssistantExecute },
 
   // Administration — mot de passe séparé (ADMIN_PASSWORD), jamais lié à un
   // compte utilisateur. handleAdminLogin lit son propre corps (style legacy).
