@@ -64,7 +64,6 @@ Réponds uniquement avec un objet JSON de cette forme, rien d'autre :
 function extractIntentFromRawText(rawText) {
   let intent;
   try {
-    // Retire un éventuel habillage ```json ... ``` que certains modèles ajoutent.
     const cleaned = rawText.replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim();
     intent = JSON.parse(cleaned);
   } catch (e) {
@@ -77,6 +76,15 @@ function extractIntentFromRawText(rawText) {
   intent.parameters = intent.parameters || {};
   return intent;
 }
+
+function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
+
+// Un 503 (surcharge momentanée) ou 429 (limite de débit) est presque
+// toujours temporaire — quelques secondes plus tard, ça repasse. Toute
+// autre erreur (mauvaise clé, requête invalide) échouerait de la même
+// façon à chaque tentative, donc on ne réessaie jamais dans ce cas.
+const RETRIABLE_STATUSES = [503, 429];
+const RETRY_DELAYS_MS = [1000, 2500];
 
 async function understand(text, previousIntent) {
   const provider = getActiveProvider();
@@ -91,8 +99,21 @@ async function understand(text, previousIntent) {
     ? `Intention en cours (à compléter avec le nouveau message) : ${JSON.stringify(previousIntent)}\n\nNouveau message du commerçant : "${text}"`
     : `Message du commerçant : "${text}"`;
 
-  const rawText = await provider.understand({ apiKey, systemPrompt: SYSTEM_PROMPT, userContent });
-  return extractIntentFromRawText(rawText);
+  let lastError;
+  for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
+    try {
+      const rawText = await provider.understand({ apiKey, systemPrompt: SYSTEM_PROMPT, userContent });
+      return extractIntentFromRawText(rawText);
+    } catch (e) {
+      lastError = e;
+      const providerStatus = Number((e.message.match(/error (\d{3})/) || [])[1]) || e.status;
+      const isRetriable = RETRIABLE_STATUSES.includes(providerStatus);
+      if (!isRetriable || attempt === RETRY_DELAYS_MS.length) throw e;
+      console.warn(`[ai] Tentative ${attempt + 1} échouée (${providerStatus}), nouvel essai dans ${RETRY_DELAYS_MS[attempt]}ms...`);
+      await sleep(RETRY_DELAYS_MS[attempt]);
+    }
+  }
+  throw lastError;
 }
 
 module.exports = { understand, isConfigured, getActiveProvider, extractIntentFromRawText, PROVIDERS };
