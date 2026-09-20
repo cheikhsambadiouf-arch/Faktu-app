@@ -44,24 +44,26 @@ async function handleGetSale(req, res, { json, user, params }) {
   json(res, 200, { sale });
 }
 
-async function handleCreateSale(req, res, { json, user, body }) {
-  const company = getOrCreateCompany(user.id);
-
-  const items = Array.isArray(body.items) ? body.items.filter(it => (it.description || '').trim()) : [];
-  if (items.length === 0) return json(res, 400, { message: 'Au moins un article est requis' });
+// Logique de création réutilisée par la route HTTP normale ET par
+// l'assistant (assistant.js) — un seul chemin de vérité, jamais dupliqué.
+// Lance une erreur avec .status si la requête est invalide, plutôt que
+// d'écrire directement une réponse HTTP (l'appelant décide comment réagir).
+function createSaleForCompany(company, payload) {
+  const items = Array.isArray(payload.items) ? payload.items.filter(it => (it.description || '').trim()) : [];
+  if (items.length === 0) { const e = new Error('Au moins un article est requis'); e.status = 400; throw e; }
   for (const it of items) {
-    if (Number(it.qty) <= 0) return json(res, 400, { message: 'Quantité invalide sur un article' });
-    if (Number(it.unit_price) < 0) return json(res, 400, { message: 'Prix unitaire invalide sur un article' });
+    if (Number(it.qty) <= 0) { const e = new Error('Quantité invalide sur un article'); e.status = 400; throw e; }
+    if (Number(it.unit_price) < 0) { const e = new Error('Prix unitaire invalide sur un article'); e.status = 400; throw e; }
   }
 
-  const clientPhone = (body.client_phone || '').trim();
-  if (!clientPhone) return json(res, 400, { message: 'Le téléphone du client est requis' });
+  const clientPhone = (payload.client_phone || '').trim();
+  if (!clientPhone) { const e = new Error('Le téléphone du client est requis'); e.status = 400; throw e; }
 
-  const tvaRate = body.tva_rate != null ? Number(body.tva_rate) : (body.apply_tva ? company.tva_rate : 0);
+  const tvaRate = payload.tva_rate != null ? Number(payload.tva_rate) : (payload.apply_tva ? company.tva_rate : 0);
   const id = crypto.randomUUID();
   const now = Date.now();
   const number = nextNumber(company.id, 'VTE');
-  const deliveryStatus = (body.client_address || '').trim() ? 'à faire' : 'retrait';
+  const deliveryStatus = (payload.client_address || '').trim() ? 'à faire' : 'retrait';
 
   withTransaction(() => {
     db.prepare(`INSERT INTO sales
@@ -69,7 +71,7 @@ async function handleCreateSale(req, res, { json, user, body }) {
        payment_status, amount_paid, delivery_status, deleted, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'impayé', 0, ?, 0, ?, ?)`)
       .run(id, company.id, number, new Date().toISOString().slice(0, 10),
-        (body.client_name || '').trim() || 'Client', clientPhone, (body.client_address || '').trim() || null,
+        (payload.client_name || '').trim() || 'Client', clientPhone, (payload.client_address || '').trim() || null,
         tvaRate, deliveryStatus, now, now);
 
     items.forEach(it => {
@@ -78,7 +80,17 @@ async function handleCreateSale(req, res, { json, user, body }) {
     });
   });
 
-  json(res, 201, { sale: getSaleWithItems(id) });
+  return getSaleWithItems(id);
+}
+
+async function handleCreateSale(req, res, { json, user, body }) {
+  const company = getOrCreateCompany(user.id);
+  try {
+    const sale = createSaleForCompany(company, body);
+    json(res, 201, { sale });
+  } catch (e) {
+    json(res, e.status || 500, { message: e.message || 'Erreur serveur' });
+  }
 }
 
 function ownedSale(companyId, saleId) {
@@ -150,8 +162,29 @@ async function handleGenerateDriverLink(req, res, { json, user, params }) {
   json(res, 200, { token: ensureDriverToken('sales', sale) });
 }
 
+// ---- Demandes issues d'un live : le vendeur accepte ou refuse avant que
+// quoi que ce soit ne parte en paiement ou en livraison. ----
+async function handleAcceptRequest(req, res, { json, user, params }) {
+  const company = getOrCreateCompany(user.id);
+  const sale = ownedSale(company.id, params.id);
+  if (!sale) return json(res, 404, { message: 'Vente introuvable' });
+  db.prepare(`UPDATE sales SET request_status='accepted', updated_at=? WHERE id=?`).run(Date.now(), sale.id);
+  json(res, 200, { sale: getSaleWithItems(sale.id) });
+}
+async function handleRefuseRequest(req, res, { json, user, body, params }) {
+  const company = getOrCreateCompany(user.id);
+  const sale = ownedSale(company.id, params.id);
+  if (!sale) return json(res, 404, { message: 'Vente introuvable' });
+  const reason = (body.reason || 'Autre').trim().slice(0, 200);
+  db.prepare(`UPDATE sales SET request_status='refused', request_refuse_reason=?, updated_at=? WHERE id=?`)
+    .run(reason, Date.now(), sale.id);
+  json(res, 200, { sale: getSaleWithItems(sale.id) });
+}
+
 module.exports = {
   handleListSales, handleGetSale, handleCreateSale, handleRecordPayment,
   handleAssignDriver, handleMarkDelivered, handleDeleteSale,
-  handleGenerateLink, handleGenerateDriverLink
+  handleGenerateLink, handleGenerateDriverLink,
+  handleAcceptRequest, handleRefuseRequest,
+  createSaleForCompany
 };
