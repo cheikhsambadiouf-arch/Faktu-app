@@ -51,31 +51,29 @@ async function handleGetInvoice(req, res, { json, user, params }) {
   json(res, 200, { invoice });
 }
 
-async function handleCreateInvoice(req, res, { json, user, body }) {
-  const company = getOrCreateCompany(user.id);
-
-  const type = VALID_TYPES.includes(body.type) ? body.type : 'FAC';
-  const items = Array.isArray(body.items) ? body.items.filter(it => (it.description || '').trim()) : [];
-  if (items.length === 0) return json(res, 400, { message: 'Au moins un article est requis' });
+// Logique de création réutilisée par la route HTTP normale ET par
+// l'assistant (ai/actions.js) — un seul chemin de vérité, jamais dupliqué.
+function createInvoiceForCompany(company, payload) {
+  const type = VALID_TYPES.includes(payload.type) ? payload.type : 'FAC';
+  const items = Array.isArray(payload.items) ? payload.items.filter(it => (it.description || '').trim()) : [];
+  if (items.length === 0) { const e = new Error('Au moins un article est requis'); e.status = 400; throw e; }
   for (const it of items) {
-    if (Number(it.qty) <= 0) return json(res, 400, { message: 'Quantité invalide sur un article' });
-    if (Number(it.unit_price) < 0) return json(res, 400, { message: 'Prix unitaire invalide sur un article' });
+    if (Number(it.qty) <= 0) { const e = new Error('Quantité invalide sur un article'); e.status = 400; throw e; }
+    if (Number(it.unit_price) < 0) { const e = new Error('Prix unitaire invalide sur un article'); e.status = 400; throw e; }
   }
 
-  let clientNameSnapshot = (body.client_name || '').trim();
+  let clientNameSnapshot = (payload.client_name || '').trim();
   let clientId = null;
-  if (body.client_id) {
-    // Le client doit appartenir à l'entreprise appelante — jamais faire
-    // confiance à un id de client fourni par le frontend sans vérification.
-    const client = db.prepare('SELECT * FROM clients WHERE id = ? AND company_id = ?').get(body.client_id, company.id);
-    if (!client) return json(res, 404, { message: 'Client introuvable' });
+  if (payload.client_id) {
+    const client = db.prepare('SELECT * FROM clients WHERE id = ? AND company_id = ?').get(payload.client_id, company.id);
+    if (!client) { const e = new Error('Client introuvable'); e.status = 404; throw e; }
     clientId = client.id;
     clientNameSnapshot = client.name;
   }
-  if (!clientNameSnapshot) return json(res, 400, { message: 'Le nom du client est requis' });
+  if (!clientNameSnapshot) { const e = new Error('Le nom du client est requis'); e.status = 400; throw e; }
 
-  const discountPct = Math.min(100, Math.max(0, Number(body.discount_pct) || 0));
-  const tvaRate = body.tva_rate != null ? Number(body.tva_rate) : company.tva_rate;
+  const discountPct = Math.min(100, Math.max(0, Number(payload.discount_pct) || 0));
+  const tvaRate = payload.tva_rate != null ? Number(payload.tva_rate) : company.tva_rate;
 
   const id = crypto.randomUUID();
   const now = Date.now();
@@ -87,7 +85,7 @@ async function handleCreateInvoice(req, res, { json, user, body }) {
        discount_pct, tva_rate, status, amount_paid, deleted, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'brouillon', 0, 0, ?, ?)`)
       .run(id, company.id, clientId, clientNameSnapshot, type, number,
-        body.date || new Date().toISOString().slice(0, 10), body.due_date || null, body.subject || null,
+        payload.date || new Date().toISOString().slice(0, 10), payload.due_date || null, payload.subject || null,
         discountPct, tvaRate, now, now);
 
     items.forEach((it, i) => {
@@ -97,7 +95,17 @@ async function handleCreateInvoice(req, res, { json, user, body }) {
     });
   });
 
-  json(res, 201, { invoice: getInvoiceWithItems(id) });
+  return getInvoiceWithItems(id);
+}
+
+async function handleCreateInvoice(req, res, { json, user, body }) {
+  const company = getOrCreateCompany(user.id);
+  try {
+    const invoice = createInvoiceForCompany(company, body);
+    json(res, 201, { invoice });
+  } catch (e) {
+    json(res, e.status || 500, { message: e.message || 'Erreur serveur' });
+  }
 }
 
 function ownedInvoice(companyId, invoiceId) {
@@ -170,5 +178,6 @@ async function handleGenerateDriverLink(req, res, { json, user, params }) {
 
 module.exports = {
   handleListInvoices, handleGetInvoice, handleCreateInvoice, handleRecordPayment,
-  handleAssignDriver, handleMarkDelivered, handleDeleteInvoice, handleGenerateLink, handleGenerateDriverLink
+  handleAssignDriver, handleMarkDelivered, handleDeleteInvoice, handleGenerateLink, handleGenerateDriverLink,
+  createInvoiceForCompany
 };
