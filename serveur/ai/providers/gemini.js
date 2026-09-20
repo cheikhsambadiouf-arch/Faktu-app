@@ -3,7 +3,7 @@
 // Même contrat que les autres fournisseurs (voir ai/index.js) :
 //   async function understand({ apiKey, systemPrompt, userContent }) -> string
 
-const DEFAULT_MODEL = 'gemini-2.0-flash';
+const DEFAULT_MODEL = 'gemini-3.6-flash';
 
 async function understand({ apiKey, systemPrompt, userContent }) {
   const model = process.env.GEMINI_MODEL || DEFAULT_MODEL;
